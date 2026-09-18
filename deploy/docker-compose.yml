@@ -45,8 +45,18 @@ x-replica: &replica
 services:
   # Two named services and not `replicas: 2`, because the rollout and the proxy
   # both need to tell them apart.
-  backend-1: *replica
-  backend-2: *replica
+  #
+  # Each replica is also published by itself, on the loopback address only, so
+  # that you can ask one replica for its health and its stream count. Listeners
+  # must go through the proxy, which is what keeps a stream on one replica.
+  backend-1:
+    <<: *replica
+    ports:
+      - "${LISTEN_BACKEND_1:-127.0.0.1:11001}:8090"
+  backend-2:
+    <<: *replica
+    ports:
+      - "${LISTEN_BACKEND_2:-127.0.0.1:11002}:8090"
 
   proxy:
     image: caddy:2-alpine
@@ -55,7 +65,7 @@ services:
     # Rootless Docker cannot publish a port below 1024. Terminate TLS in front
     # of this, on the host, and forward to it.
     ports:
-      - "${LISTEN:-127.0.0.1:8090}:8080"
+      - "${LISTEN:-127.0.0.1:11000}:8080"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     read_only: true
