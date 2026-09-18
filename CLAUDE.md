@@ -27,6 +27,10 @@ also renders one MP3 for a posted tab state (`POST /v1/announcements`). Read `RE
 - **A stream's queue hears the whole station.** An announcement for platforms
   outside the stream takes no lane but can still cut short or supersede one of
   the stream's. Each zone of the stream is one lane, and the mixer sums them.
+- **Every stream URL carries `crs`, segment URLs included.** Production runs two
+  replicas, a stream lives in one replica's memory, and the proxy routes stream
+  requests by that parameter (`deploy/Caddyfile`). A new stream endpoint that
+  lacks it would be sent to either replica.
 - **The endless response is MP3 on purpose.** AAC silence is about 500 bytes a
   second, and Chrome never starts playing a response that slow. Don't switch it
   to AAC to save an encoder.

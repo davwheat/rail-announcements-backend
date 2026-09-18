@@ -181,8 +181,10 @@ func (s *Server) playlist(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-store")
 	io.WriteString(w, live.Playlist.Render(func(sequence int) string {
-		// Relative to /v1/streams/live.m3u8.
-		return fmt.Sprintf("%s/%d.aac", live.Key, sequence)
+		// Relative to /v1/streams/live.m3u8. The station rides along so that a load
+		// balancer can send a segment request to the replica that holds the stream:
+		// it routes every stream request by its crs parameter.
+		return fmt.Sprintf("%s/%d.aac?crs=%s", live.Key, sequence, live.Zone.CRS)
 	}))
 }
 

@@ -154,6 +154,9 @@ func TestAListenerHearsAnAnnouncementOverHLS(t *testing.T) {
 			if line == "" || strings.HasPrefix(line, "#") || heard[line] != nil {
 				continue
 			}
+			if !strings.HasSuffix(line, ".aac?crs=KGX") {
+				t.Fatalf("segment %q does not carry its station for the load balancer", line)
+			}
 			segment, err := http.Get(server.URL + "/v1/streams/" + line)
 			if err != nil {
 				t.Fatal(err)

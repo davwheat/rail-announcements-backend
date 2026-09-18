@@ -13,7 +13,9 @@ the reference, and the tests here fail on any clip that differs from it. See
 [Keep the port in step with the website](#keep-the-port-in-step-with-the-website).
 
 For the design and the migration plan, see
-[docs/architecture.md](docs/architecture.md).
+[docs/architecture.md](docs/architecture.md). To run it in production, as two
+replicas under rootless Docker with rolling updates, see
+[deploy/README.md](deploy/README.md).
 
 ## Run the service
 
@@ -159,3 +161,7 @@ and then port the change until `go test ./...` passes.
 part of this repository. The generated code is committed, so you don't need the
 schema to build or test. `buf.gen.yaml` holds the generator settings for
 whoever has the schema.
+
+## License
+
+[MIT](LICENSE).
