@@ -4,9 +4,9 @@ Two replicas of the service behind a proxy, run by rootless Docker. One replica
 is always serving, including during a rollout.
 
 ```
-host TLS proxy ──▶ 127.0.0.1:11000  proxy (Caddy)
-                                     ├─▶ backend-1   (also 127.0.0.1:11001)
-                                     └─▶ backend-2   (also 127.0.0.1:11002)
+host TLS proxy ──▶ 127.0.0.1:12000  proxy (Caddy)
+                                     ├─▶ backend-1   (also 127.0.0.1:12001)
+                                     └─▶ backend-2   (also 127.0.0.1:12002)
 ```
 
 ## How requests are routed
@@ -63,14 +63,14 @@ Do this once, as the user that runs the service.
     Replace `REPOSITORY_URL` with this repository's URL. The submodule is about
     1.7 GB.
 
-1.  Put a TLS proxy in front of `127.0.0.1:11000`. Rootless Docker can't publish
+1.  Put a TLS proxy in front of `127.0.0.1:12000`. Rootless Docker can't publish
     a port below 1024, so the stack doesn't terminate TLS itself. The proxy in
     front must not buffer responses, because `live.mp3` is one response that
     never ends. For nginx:
 
     ```nginx
     location / {
-        proxy_pass http://127.0.0.1:11000;
+        proxy_pass http://127.0.0.1:12000;
         proxy_http_version 1.1;
         proxy_buffering off;
     }
@@ -131,8 +131,8 @@ Set these in the environment, or in a `.env` file in this directory.
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `LISTEN` | The host address and port that the proxy is published on. Send listeners here. | `127.0.0.1:11000` |
-| `LISTEN_BACKEND_1`, `LISTEN_BACKEND_2` | Where each replica is published by itself, for looking at one replica. | `127.0.0.1:11001`, `127.0.0.1:11002` |
+| `LISTEN` | The host address and port that the proxy is published on. Send listeners here. | `127.0.0.1:12000` |
+| `LISTEN_BACKEND_1`, `LISTEN_BACKEND_2` | Where each replica is published by itself, for looking at one replica. | `127.0.0.1:12001`, `127.0.0.1:12002` |
 | `DARWIN_BROWSER_URL` | The feed. | `https://darwinbrowser.com` |
 | `ALLOWED_ORIGINS` | The origins that may call `POST /v1/announcements`, separated by commas. Playback needs no permission. | `https://railannouncements.co.uk` |
 | `AUDIO_CACHE_MB` | Decoded clips held in memory, for each replica. | `256` |
@@ -143,11 +143,11 @@ Set these in the environment, or in a `.env` file in this directory.
 ```sh
 docker compose -f deploy/docker-compose.yml ps
 docker compose -f deploy/docker-compose.yml logs -f backend-1 backend-2
-curl -s http://127.0.0.1:11001/healthz   # backend-1
-curl -s http://127.0.0.1:11002/healthz   # backend-2
+curl -s http://127.0.0.1:12001/healthz   # backend-1
+curl -s http://127.0.0.1:12002/healthz   # backend-2
 ```
 
-`/healthz` on port 11000 goes through the proxy and answers from either
+`/healthz` on port 12000 goes through the proxy and answers from either
 replica, so ask a replica's own port for its `streams` count. Don't point
 listeners at those ports: only the proxy keeps a stream's requests on the
 replica that holds it.

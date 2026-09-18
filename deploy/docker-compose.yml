@@ -52,11 +52,11 @@ services:
   backend-1:
     <<: *replica
     ports:
-      - "${LISTEN_BACKEND_1:-127.0.0.1:11001}:8090"
+      - "${LISTEN_BACKEND_1:-127.0.0.1:12001}:8090"
   backend-2:
     <<: *replica
     ports:
-      - "${LISTEN_BACKEND_2:-127.0.0.1:11002}:8090"
+      - "${LISTEN_BACKEND_2:-127.0.0.1:12002}:8090"
 
   proxy:
     image: caddy:2-alpine
@@ -65,7 +65,7 @@ services:
     # Rootless Docker cannot publish a port below 1024. Terminate TLS in front
     # of this, on the host, and forward to it.
     ports:
-      - "${LISTEN:-127.0.0.1:11000}:8080"
+      - "${LISTEN:-127.0.0.1:12000}:8080"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     read_only: true
