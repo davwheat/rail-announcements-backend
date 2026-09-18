@@ -11,6 +11,7 @@ import (
 	"rail-announcements-backend/internal/audio"
 	"rail-announcements-backend/internal/feed"
 	"rail-announcements-backend/internal/hls"
+	"rail-announcements-backend/internal/ketech"
 )
 
 type capture struct {
@@ -274,6 +275,18 @@ func TestZonesParseAndShareKeys(t *testing.T) {
 	}
 	if _, ok := zoned.lane("9"); ok {
 		t.Error("platform 9 is in no zone")
+	}
+
+	// A station with no known platform list is asked for with every platform a voice can say.
+	everything := "crs=ECR&zone="
+	for _, platform := range ketech.Phil.Platforms {
+		everything += platform + ":AMEY_PHIL_V1,"
+	}
+	if whole, err := parse(everything); err != nil || len(whole.Platforms) != len(ketech.Phil.Platforms) {
+		t.Errorf("a zone of all %d platforms gave %d, %v", len(ketech.Phil.Platforms), len(whole.Platforms), err)
+	}
+	if byVoice, err := parse("crs=ECR&voice=AMEY_CELIA_V1"); err != nil || byVoice.voiceFor("7").ID != "AMEY_CELIA_V1" {
+		t.Errorf("a whole station in one voice: %+v %v", byVoice, err)
 	}
 
 	for _, bad := range []string{"", "crs=KGX&zone=1&platform=2", "crs=KGX&zone=1,2&zone=2", "crs=KINGS", "crs=KGX&voice=anne", "crs=KGX&platform=1:anne", "crs=KGX&type=arriving", "crs=KGX&chime=five", "crs=KGX&vias=maybe", "crs=KGX&missing_audio=shrug"} {

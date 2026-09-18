@@ -36,7 +36,9 @@ type Zone struct {
 
 var crsPattern = regexp.MustCompile(`^[A-Z]{3}$`)
 
-const maxPlatforms = 64
+// maxPlatforms bounds a stream's platform list. A voice can say 77 platforms,
+// and a listener at a station with no known platform list names every one.
+const maxPlatforms = 256
 
 // PlatformKey folds a platform as the feed names it onto the platform a voice
 // is chosen for, as the website does: "10A" is platform 10a, but "3F" is 3.
