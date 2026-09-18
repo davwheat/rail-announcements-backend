@@ -1,0 +1,351 @@
+package api
+
+import (
+	"bytes"
+	"compress/gzip"
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"rail-announcements-backend/internal/audio"
+	"rail-announcements-backend/internal/feed"
+	"rail-announcements-backend/internal/feed/livepb"
+	"rail-announcements-backend/internal/stream"
+)
+
+const audioDirectory = "../../rail-announcements/audio"
+
+type testLog struct{ t *testing.T }
+
+func (l testLog) Infof(format string, args ...any) { l.t.Logf(format, args...) }
+func (l testLog) Warnf(format string, args ...any) { l.t.Logf("WARN "+format, args...) }
+
+func library(t *testing.T) *audio.Library {
+	t.Helper()
+	if _, err := os.Stat(audioDirectory + "/station/ketech/phil"); err != nil {
+		t.Skip("the audio directory is not checked out")
+	}
+	lib, err := audio.NewLibrary(audioDirectory, "", 128<<20)
+	if err != nil {
+		t.Skip(err)
+	}
+	return lib
+}
+
+// fakeFeed serves one announcement stream: ready, then a next train
+// announcement for the stopping service in the feed's snapshot fixture.
+// The fixture's stations are invented, so they are renamed to recorded ones.
+func fakeFeed(t *testing.T) *httptest.Server {
+	t.Helper()
+	raw, err := os.ReadFile("../feed/testdata/stopping_snapshot.pb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot livepb.ServerMessage
+	if err := proto.Unmarshal(raw, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	movement := snapshot.GetSnapshot().GetMovements()[0]
+	recorded := map[string]string{"TST": "KGX", "ORG": "KGX", "JNC": "SVG", "DST": "CBG"}
+	rename := func(l *livepb.Location) {
+		if code, ok := recorded[l.GetCrs()]; ok {
+			l.Crs = &code
+		}
+	}
+	rename(movement.GetStation())
+	for _, endpoint := range append(movement.GetOrigins(), movement.GetDestinations()...) {
+		rename(endpoint.GetLocation())
+		for i, crs := range endpoint.GetVia().GetLocs() {
+			endpoint.Via.Locs[i] = recorded[crs]
+		}
+	}
+	for _, call := range movement.GetCallingPoints() {
+		rename(call.GetLocation())
+	}
+	fixture := livepb.ServerMessage{Version: 2, Payload: &livepb.ServerMessage_Announcement{Announcement: &livepb.Announcement{
+		EventId:          "next:" + movement.GetId(),
+		AnnouncementType: livepb.AnnouncementType_ANNOUNCEMENT_TYPE_NEXT,
+		MovementId:       movement.GetId(),
+		Station:          movement.GetStation(),
+		CreatedAt:        timestamppb.Now(),
+		Details:          movement,
+	}}}
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/announcements/live" || r.URL.Query().Get("crs") != "KGX" {
+			http.Error(w, "unexpected request "+r.URL.String(), http.StatusBadRequest)
+			return
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		send := func(message *livepb.ServerMessage) {
+			frame, _ := proto.Marshal(message)
+			conn.WriteMessage(websocket.BinaryMessage, frame)
+		}
+		announcement := proto.Clone(&fixture).(*livepb.ServerMessage)
+		station := announcement.GetAnnouncement().GetStation()
+		send(&livepb.ServerMessage{Version: 2, Payload: &livepb.ServerMessage_Ready{Ready: &livepb.Ready{Station: station, Healthy: true, CreatedAt: timestamppb.Now()}}})
+		// Long enough for the stream to be up and listening.
+		time.Sleep(500 * time.Millisecond)
+		announcement.GetAnnouncement().ExpiresAt = timestamppb.New(time.Now().Add(time.Minute))
+		send(announcement)
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestAListenerHearsAnAnnouncementOverHLS(t *testing.T) {
+	lib := library(t)
+	upstream := fakeFeed(t)
+	hub, err := feed.NewHub(upstream.URL, testLog{t})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager := stream.NewManager(ctx, hub, stream.Voices{Library: lib}, testLog{t}, stream.Options{
+		BitrateKbps: 64, SegmentDuration: time.Second, Window: 6, IdleTimeout: 30 * time.Second, MaxStreams: 2,
+	})
+	server := httptest.NewServer(New(manager, lib, []string{"*"}, testLog{t}).Handler())
+	defer server.Close()
+
+	playlistURL := server.URL + "/v1/streams/live.m3u8?crs=KGX&chime=none"
+	heard := map[string][]byte{}
+	var order []string
+	deadline := time.Now().Add(40 * time.Second)
+	for time.Now().Before(deadline) && len(order) < 14 {
+		response, err := http.Get(playlistURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("playlist: HTTP %d: %s", response.StatusCode, body)
+		}
+		if got := response.Header.Get("Content-Type"); got != "application/vnd.apple.mpegurl" {
+			t.Fatalf("playlist content type %q", got)
+		}
+		if response.Header.Get("Access-Control-Allow-Origin") != "*" {
+			t.Fatal("the playlist cannot be read from another origin")
+		}
+		for _, line := range strings.Split(string(body), "\n") {
+			if line == "" || strings.HasPrefix(line, "#") || heard[line] != nil {
+				continue
+			}
+			segment, err := http.Get(server.URL + "/v1/streams/" + line)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, _ := io.ReadAll(segment.Body)
+			segment.Body.Close()
+			if segment.StatusCode != http.StatusOK || !bytes.HasPrefix(data, []byte("ID3")) {
+				t.Fatalf("segment %s: HTTP %d, starts % x", line, segment.StatusCode, data[:min(4, len(data))])
+			}
+			heard[line] = data
+			order = append(order, line)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if len(order) < 14 {
+		t.Fatalf("only %d segments in 40 seconds", len(order))
+	}
+
+	var joined bytes.Buffer
+	for _, name := range order {
+		joined.Write(heard[name])
+	}
+	pcm := decode(t, "aac", joined.Bytes())
+	loudest, loudSeconds := 0, 0.0
+	for i := 0; i+1 < len(pcm); i += 2 {
+		sample := int(int16(binary.LittleEndian.Uint16(pcm[i:])))
+		if sample < 0 {
+			sample = -sample
+		}
+		loudest = max(loudest, sample)
+		if sample > 1000 {
+			loudSeconds += 1.0 / audio.SampleRate
+		}
+	}
+	t.Logf("%d segments, %.1fs decoded, peak %d, %.1fs above the noise floor", len(order), float64(len(pcm))/2/audio.SampleRate, loudest, loudSeconds)
+	if loudest < 5000 || loudSeconds < 1 {
+		t.Error("the stream carried no speech")
+	}
+}
+
+func TestTheStreamAlsoComesAsOneEndlessResponse(t *testing.T) {
+	lib := library(t)
+	hub, _ := feed.NewHub("http://127.0.0.1:1", testLog{t})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager := stream.NewManager(ctx, hub, stream.Voices{Library: lib}, testLog{t}, stream.Options{
+		BitrateKbps: 64, SegmentDuration: time.Second, Window: 6, IdleTimeout: 30 * time.Second, MaxStreams: 2,
+	})
+	server := httptest.NewServer(New(manager, lib, []string{"*"}, testLog{t}).Handler())
+	defer server.Close()
+
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/streams/live.mp3?crs=KGX&zone=1,2&zone=3", nil)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "audio/mpeg" {
+		t.Fatalf("HTTP %d %s", response.StatusCode, response.Header.Get("Content-Type"))
+	}
+	// Three seconds at 64 kbit/s, silence included, which has to arrive while the
+	// response is still open.
+	received := make([]byte, 24_000)
+	started := time.Now()
+	if _, err := io.ReadFull(response.Body, received); err != nil {
+		t.Fatal(err)
+	}
+	if received[0] != 0xFF || received[1]&0xFE != 0xFA {
+		t.Errorf("the response does not start on an MP3 frame: % x", received[:4])
+	}
+	if took := time.Since(started); took > 15*time.Second {
+		t.Errorf("three seconds of audio took %s", took)
+	}
+	if pcm := decode(t, "mp3", received); len(pcm) < 2*audio.SampleRate {
+		t.Errorf("only %d bytes decoded", len(pcm))
+	}
+}
+
+func decode(t *testing.T, format string, aac []byte) []byte {
+	t.Helper()
+	cmd := exec.Command("ffmpeg", "-v", "error", "-f", format, "-i", "-", "-f", "s16le", "-ac", "1", "-ar", fmt.Sprint(audio.SampleRate), "-")
+	cmd.Stdin = bytes.NewReader(aac)
+	var problems bytes.Buffer
+	cmd.Stderr = &problems
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("ffmpeg could not decode the stream: %v: %s", err, problems.String())
+	}
+	return out
+}
+
+func post(t *testing.T, url string, body any) (*http.Response, []byte) {
+	t.Helper()
+	encoded, _ := json.Marshal(body)
+	response, err := http.Post(url+"/v1/announcements", "application/json", bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	data, _ := io.ReadAll(response.Body)
+	return response, data
+}
+
+func TestAPostedStateComesBackAsAnMP3OrAJSONError(t *testing.T) {
+	lib := library(t)
+	hub, _ := feed.NewHub("http://127.0.0.1:1", testLog{t})
+	manager := stream.NewManager(context.Background(), hub, stream.Voices{Library: lib}, testLog{t}, stream.Options{MaxStreams: 1})
+	server := httptest.NewServer(New(manager, lib, []string{"https://railannouncements.co.uk"}, testLog{t}).Handler())
+	defer server.Close()
+
+	file, err := os.Open("../ketech/testdata/parity-state.json.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	unzipped, _ := gzip.NewReader(file)
+	var states []struct {
+		Voice        string          `json:"voice"`
+		Announcement string          `json:"announcement"`
+		State        json.RawMessage `json:"state"`
+	}
+	if err := json.NewDecoder(unzipped).Decode(&states); err != nil {
+		t.Fatal(err)
+	}
+	state := states[0]
+
+	request := map[string]any{"system": "AMEY_PHIL_V1", "announcement": state.Announcement, "state": state.State}
+	response, body := post(t, server.URL, request)
+	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "audio/mpeg" {
+		t.Fatalf("HTTP %d %s: %s", response.StatusCode, response.Header.Get("Content-Type"), body[:min(200, len(body))])
+	}
+	if !bytes.HasPrefix(body, []byte("ID3")) && (len(body) < 2 || body[0] != 0xFF) {
+		t.Errorf("the body is not an MP3: % x", body[:8])
+	}
+	if len(body) < 50_000 {
+		t.Errorf("the MP3 is only %d bytes", len(body))
+	}
+
+	var broken map[string]any
+	json.Unmarshal(state.State, &broken)
+	broken["terminatingStationCode"] = "ZZZ"
+	for name, c := range map[string]struct {
+		body   any
+		status int
+		code   string
+	}{
+		"unknown system":       {map[string]any{"system": "NOPE", "announcement": "nextTrain", "state": broken}, 404, "unknown_system"},
+		"unknown announcement": {map[string]any{"system": "AMEY_PHIL_V1", "announcement": "nope", "state": broken}, 404, "unknown_announcement"},
+		"missing audio":        {map[string]any{"system": "AMEY_PHIL_V1", "announcement": state.Announcement, "state": broken}, 422, "missing_audio"},
+		"bad state":            {map[string]any{"system": "AMEY_PHIL_V1", "announcement": "nextTrain", "state": "text"}, 422, "invalid_state"},
+		"not json":             {"{", 400, "bad_request"},
+	} {
+		response, body := post(t, server.URL, c.body)
+		var parsed struct {
+			Error struct{ Code, Message string } `json:"error"`
+		}
+		json.Unmarshal(body, &parsed)
+		if response.StatusCode != c.status || parsed.Error.Code != c.code || parsed.Error.Message == "" || response.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("%s: HTTP %d %s", name, response.StatusCode, body)
+		}
+	}
+
+	preflight, _ := http.NewRequest(http.MethodOptions, server.URL+"/v1/announcements", nil)
+	preflight.Header.Set("Origin", "https://railannouncements.co.uk")
+	allowed, err := http.DefaultClient.Do(preflight)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allowed.StatusCode != http.StatusNoContent || allowed.Header.Get("Access-Control-Allow-Origin") != "https://railannouncements.co.uk" {
+		t.Errorf("preflight: HTTP %d, allow-origin %q", allowed.StatusCode, allowed.Header.Get("Access-Control-Allow-Origin"))
+	}
+	preflight.Header.Set("Origin", "https://example.com")
+	if refused, _ := http.DefaultClient.Do(preflight); refused.Header.Get("Access-Control-Allow-Origin") != "" {
+		t.Error("an origin that is not listed was allowed")
+	}
+}
+
+func TestBadZonesAreRefused(t *testing.T) {
+	hub, _ := feed.NewHub("http://127.0.0.1:1", testLog{t})
+	manager := stream.NewManager(context.Background(), hub, nil, testLog{t}, stream.Options{MaxStreams: 1})
+	server := httptest.NewServer(New(manager, nil, []string{"*"}, testLog{t}).Handler())
+	defer server.Close()
+	for _, query := range []string{"", "?crs=KGX&voice=anne", "?crs=KGX&type=arriving"} {
+		response, err := http.Get(server.URL + "/v1/streams/live.m3u8" + query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != http.StatusBadRequest {
+			t.Errorf("%q: HTTP %d", query, response.StatusCode)
+		}
+	}
+	if response, _ := http.Get(server.URL + "/v1/streams/nope/1.aac"); response.StatusCode != http.StatusNotFound {
+		t.Errorf("unknown segment: HTTP %d", response.StatusCode)
+	}
+}
