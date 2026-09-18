@@ -17,23 +17,18 @@ For the design and the migration plan, see
 
 ## Run the service
 
-You need Go 1.26, `ffmpeg` on your `PATH`, and the website's audio directory.
+You need Go 1.26 and `ffmpeg` on your `PATH`.
 
-1.  Put the audio in place. The service reads `rail-announcements/audio`, which
-    mirrors the website repository so that the repository can become a
-    submodule at `rail-announcements`:
+1.  Fetch the website, which holds the audio. It's a submodule at
+    `rail-announcements`, and the service reads `rail-announcements/audio`:
 
     ```sh
-    mkdir -p rail-announcements
-    cp -R PATH_TO_WEBSITE/audio rail-announcements/audio
+    git submodule update --init
     ```
 
-    Replace `PATH_TO_WEBSITE` with the path of a checkout of the website.
-
-    To use a submodule instead, remove the `/rail-announcements/` line from
-    `.gitignore`, delete the directory, and then run
-    `git submodule add WEBSITE_REPOSITORY_URL rail-announcements`. Replace
-    `WEBSITE_REPOSITORY_URL` with the URL of the website's repository.
+    The website's repository is about 1.7 GB. If you already have a clone, add
+    `--reference PATH_TO_CLONE` to borrow its objects instead of downloading
+    them. Replace `PATH_TO_CLONE` with the path of your clone.
 
 1.  Optional: copy `config.example.toml` to `config.toml` and edit it. Every
     key has a default.

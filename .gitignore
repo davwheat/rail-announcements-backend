@@ -1,7 +1,3 @@
-# The website's checkout, which holds the audio. It becomes a submodule at this
-# path: see README.md.
-/rail-announcements/
-
 config.toml
 /rail-announcements-backend
 .DS_Store

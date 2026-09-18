@@ -1,0 +1,3 @@
+[submodule "rail-announcements"]
+	path = rail-announcements
+	url = git@github.com:davwheat/rail-announcements

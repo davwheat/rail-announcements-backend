@@ -32,12 +32,15 @@ also renders one MP3 for a posted tab state (`POST /v1/announcements`). Read `RE
   to AAC to save an encoder.
 - **Logging** is `internal/logging`, a small logrus wrapper whose error methods
   take the error first. **Config** is Viper with validator tags. `config.toml` is gitignored.
-- **`rail-announcements/` is gitignored** and becomes a submodule of the
-  website. Only its `audio/` directory is read.
+- **`rail-announcements/` is a submodule** of the website, and only its
+  `audio/` directory is read. Don't edit the website through it: work in the
+  website's own checkout. To pick up new recordings, move the submodule to the
+  website commit that has them.
 
 ## Commands
 
 ```sh
+git submodule update --init         # the website, for its audio (about 1.7 GB)
 go build ./... && go vet ./...
 go test ./...                        # ffmpeg and the audio directory are optional: tests skip without them
 go test ./internal/api -run Hears -v # end to end: fake feed to decoded HLS audio
