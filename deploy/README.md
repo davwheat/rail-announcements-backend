@@ -48,16 +48,19 @@ Do this once, as the user that runs the service.
     systemctl --user enable --now docker
     ```
 
-1.  Point the Docker CLI at the rootless daemon, in the user's shell profile:
+1.  Point the Docker CLI at the rootless daemon, in the profile that a login
+    shell reads, such as `~/.profile`. A deploy from GitHub runs the script in
+    a login shell, so it reads this file too:
 
     ```sh
     export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/docker.sock
     ```
 
-1.  Clone the repository with its submodule, which holds the audio:
+1.  Clone the `deploy` branch of the repository, which is what production
+    runs, with its submodule, which holds the audio:
 
     ```sh
-    git clone --recurse-submodules REPOSITORY_URL
+    git clone --recurse-submodules --branch deploy REPOSITORY_URL
     ```
 
     Replace `REPOSITORY_URL` with this repository's URL. The submodule is about
@@ -103,19 +106,29 @@ Do this once, as the user that runs the service.
 
 ## Deploy and update
 
+To deploy, push to the `deploy` branch. GitHub Actions runs the tests, and if
+they pass, it runs the deploy script on the host over SSH. To set that up, see
+[Deploy from GitHub](#deploy-from-github).
+
+To deploy by hand, run the script on the host:
+
 ```sh
 ./deploy/deploy.sh
 ```
 
-The script pulls `main` and the submodule, builds the image, and then replaces
-`backend-1` and `backend-2` in turn. It waits for each to report healthy, and
-then ten more seconds for the proxy to send its stations back, before it
-touches the next one. The same command performs the first deploy.
+The script pulls the checked-out branch and the submodule, builds the image,
+and then replaces `backend-1` and `backend-2` in turn. It waits for each to
+report healthy, and then ten more seconds for the proxy to send its stations
+back, before it touches the next one. The same command performs the first
+deploy.
 
 - If a replica doesn't become healthy in 90 seconds, the script prints its logs
   and stops. The other replica is still serving the previous version.
 - If either replica is unhealthy before the rollout starts, the script refuses
   to start, because replacing the healthy one would leave nothing serving.
+- To deploy one commit and not the branch's latest, pass it:
+  `./deploy/deploy.sh COMMIT`. The script fast-forwards to that commit, and
+  refuses a commit that is behind the checkout.
 - To deploy what is checked out without pulling, pass `--no-pull`.
 
 During a rollout, a listener can hear up to two gaps of a few seconds: one when
@@ -124,6 +137,61 @@ announcement that is being spoken at that moment is cut off, and isn't repeated.
 
 Changing `Caddyfile` recreates the proxy at the end of the rollout, which drops
 every connection for about a second.
+
+### Deploy from GitHub
+
+The `CI` workflow, `.github/workflows/ci.yml`, tests each pull request and each
+push to `main` or `deploy`. When the tests of a push to `deploy` pass, the
+workflow connects to the host as `railannouncements` and runs
+`deploy/deploy.sh COMMIT` with the pushed commit. It deploys that commit, and
+not the branch's latest, so that a push whose tests haven't finished is never
+deployed. The workflow doesn't cancel a deploy that has started: a push to
+`deploy` waits for the run before it to finish, and a newer push replaces one
+that is waiting.
+
+To follow a deploy, look at these:
+
+- The **Deploy** step of the run's `deploy` job, which shows the script's
+  output as it runs.
+- The repository's `production` environment, which records each deploy and
+  whether it succeeded.
+- The run's summary, which shows the end of the script's output: the running
+  containers after a deploy that succeeded, or the failed replica's logs.
+
+To set it up, do this once:
+
+1.  Create a key pair without a passphrase:
+
+    ```sh
+    ssh-keygen -t ed25519 -N '' -C github-actions-deploy -f deploy_key
+    ```
+
+1.  On the host, add the contents of `deploy_key.pub` to the service user's
+    `~/.ssh/authorized_keys`, after the `restrict` option, which turns off
+    forwarding and terminals for that key:
+
+    ```
+    restrict ssh-ed25519 AAAA... github-actions-deploy
+    ```
+
+1.  In the repository's settings on GitHub, create the `production`
+    environment and limit its deployment branches to `deploy`. Add the contents
+    of `deploy_key` as the environment's `DEPLOY_SSH_KEY` secret, so that a
+    workflow on another branch can't read it. Then delete both key files.
+
+1.  If the host's checkout is on another branch, switch it to `deploy`. The
+    workflow runs the script that the host has checked out, and a script from
+    before the `deploy` branch doesn't take a commit:
+
+    ```sh
+    cd ~/rail-announcements-backend
+    git fetch
+    git switch deploy
+    ```
+
+The workflow trusts only the host key in its `DEPLOY_HOST_KEY` setting. If you
+rebuild the host, replace that setting with the new key, which is in the host's
+`/etc/ssh/ssh_host_ed25519_key.pub` file.
 
 ## Settings
 
