@@ -7,6 +7,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -26,8 +27,10 @@ type Config struct {
 
 type APIConfig struct {
 	Port int `validate:"min=1,max=65535"`
-	// AllowedOrigins are the websites that may play streams and post states. "*" allows any.
-	AllowedOrigins []string `validate:"min=1"`
+	// AllowedOrigins are the websites that may play streams and post states.
+	// "*" allows any, and "https://*.example.com" allows every subdomain of
+	// example.com but not example.com itself.
+	AllowedOrigins []string `validate:"min=1,dive,origin"`
 }
 
 type FeedConfig struct {
@@ -91,8 +94,28 @@ func Load(path string) (*Config, error) {
 	if err := v.Unmarshal(&cfg, hook); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
-	if err := validator.New().Struct(cfg); err != nil {
+	validate := validator.New()
+	if err := validate.RegisterValidation("origin", isOrigin); err != nil {
+		return nil, err
+	}
+	if err := validate.Struct(cfg); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
 	return &cfg, nil
+}
+
+// isOrigin accepts "*" or a scheme, host and optional port, which is all that a
+// browser's Origin header holds: an entry with a path, a trailing slash or no
+// scheme would never match one. The host's first label can be "*".
+func isOrigin(fl validator.FieldLevel) bool {
+	origin := fl.Field().String()
+	if origin == "*" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme == "" || u.Scheme+"://"+u.Host != origin {
+		return false
+	}
+	host := strings.TrimPrefix(u.Hostname(), "*.")
+	return host != "" && !strings.Contains(host, "*")
 }

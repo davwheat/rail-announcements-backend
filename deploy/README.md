@@ -202,7 +202,7 @@ Set these in the environment, or in a `.env` file in this directory.
 | `LISTEN` | The host address and port that the proxy is published on. Send listeners here. | `127.0.0.1:12000` |
 | `LISTEN_BACKEND_1`, `LISTEN_BACKEND_2` | Where each replica is published by itself, for looking at one replica. | `127.0.0.1:12001`, `127.0.0.1:12002` |
 | `DARWIN_BROWSER_URL` | The feed. | `https://darwinbrowser.com` |
-| `ALLOWED_ORIGINS` | The origins that may call `POST /v1/announcements`, separated by commas. Playback needs no permission. | `https://railannouncements.co.uk` |
+| `ALLOWED_ORIGINS` | The origins that may call `POST /v1/announcements`, separated by commas. `https://*.example.com` allows every subdomain of `example.com`. Playback needs no permission. | `https://railannouncements.co.uk` |
 | `AUDIO_CACHE_MB` | Decoded clips held in memory, for each replica. | `256` |
 | `MAX_STREAMS` | Streams that one replica runs at once. | `200` |
 
