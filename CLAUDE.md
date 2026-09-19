@@ -48,6 +48,9 @@ every system the website registers. Read `README.md` for the API and
   replicas, a stream lives in one replica's memory, and the proxy routes stream
   requests by that parameter (`deploy/Caddyfile`). A new stream endpoint that
   lacks it would be sent to either replica.
+- **A push to `deploy` deploys to production.** CI (`.github/workflows/ci.yml`)
+  tests it, and then runs `deploy/deploy.sh COMMIT` on the host over SSH.
+  Don't push to that branch unless you're asked to deploy.
 - **The endless response is MP3 on purpose.** AAC silence is about 500 bytes a
   second, and Chrome never starts playing a response that slow. Don't switch it
   to AAC to save an encoder.

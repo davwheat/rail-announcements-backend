@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Rolls the current main branch out to production, one replica at a time, so
-# that one replica is always serving.
+# Rolls the checked-out branch out to production, one replica at a time, so
+# that one replica is always serving. Production checks out the deploy branch.
 #
 #   ./deploy/deploy.sh             pull, build and roll out
+#   ./deploy/deploy.sh COMMIT      fast-forward to COMMIT, build and roll out
 #   ./deploy/deploy.sh --no-pull   build and roll out what is checked out
 #
 # Run it on the production host, as the user that owns the rootless Docker
-# daemon. It stops at the first replica that fails to become healthy, which
-# leaves the other replica serving the previous version.
+# daemon. CI runs it with the pushed commit for each push to the deploy branch.
+# It stops at the first replica that fails to become healthy, which leaves the
+# other replica serving the previous version.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -16,15 +18,21 @@ healthy_within=90
 settle=10
 
 pull=true
+commit=
 for argument in "$@"; do
 	case "$argument" in
 	--no-pull) pull=false ;;
-	*)
+	-*)
 		echo "unknown option: $argument" >&2
 		exit 2
 		;;
+	*) commit="$argument" ;;
 	esac
 done
+if ! "$pull" && [ -n "$commit" ]; then
+	echo "--no-pull deploys what is checked out, so it takes no commit" >&2
+	exit 2
+fi
 
 compose() { docker compose -f deploy/docker-compose.yml "$@"; }
 
@@ -48,7 +56,18 @@ wait_until_healthy() {
 }
 
 if "$pull"; then
-	git pull --ff-only
+	if [ -n "$commit" ]; then
+		git fetch
+		git merge --ff-only "$commit"
+		# A commit that is already behind the checkout would otherwise deploy the
+		# newer checkout under the older commit's name.
+		if [ "$(git rev-parse HEAD)" != "$(git rev-parse "$commit^{commit}")" ]; then
+			echo "$commit is behind the checked-out $(git rev-parse --short HEAD), and a deploy only moves forward" >&2
+			exit 1
+		fi
+	else
+		git pull --ff-only
+	fi
 	git submodule update --init
 fi
 if [ ! -d rail-announcements/audio/station/ketech ]; then

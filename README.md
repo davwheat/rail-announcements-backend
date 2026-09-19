@@ -14,7 +14,8 @@ the reference, and the tests here fail on any clip that differs from it. See
 For the design and the decisions, see
 [docs/architecture.md](docs/architecture.md). To run it in production, as two
 replicas under rootless Docker with rolling updates, see
-[deploy/README.md](deploy/README.md).
+[deploy/README.md](deploy/README.md). A push to the `deploy` branch deploys it,
+once the tests pass.
 
 ## Run the service
 
@@ -140,6 +141,9 @@ Tests that need `ffmpeg` or the audio directory skip themselves when either is
 missing. `internal/api` holds the end-to-end test: a fake feed sends a
 protobuf announcement, and the test decodes the HLS segments and checks that
 they carry speech.
+
+GitHub Actions runs the tests, with `ffmpeg` and the audio, for each pull
+request and each push to `main` or `deploy`.
 
 ## Keep the port in step with the website
 
