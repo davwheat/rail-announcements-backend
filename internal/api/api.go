@@ -37,12 +37,12 @@ type Logger interface {
 type Server struct {
 	streams *stream.Manager
 	library *audio.Library
-	origins []string
+	origins origins
 	log     Logger
 }
 
 func New(streams *stream.Manager, library *audio.Library, origins []string, log Logger) *Server {
-	return &Server{streams: streams, library: library, origins: origins, log: log}
+	return &Server{streams: streams, library: library, origins: parseOrigins(origins), log: log}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -63,9 +63,9 @@ func (s *Server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 		switch {
-		case slices.Contains(s.origins, "*"):
+		case s.origins.any:
 			w.Header().Set("Access-Control-Allow-Origin", "*")
-		case origin != "" && slices.Contains(s.origins, origin):
+		case origin != "" && s.origins.allow(origin):
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Add("Vary", "Origin")
 		}
