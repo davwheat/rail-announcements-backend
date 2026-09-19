@@ -5,7 +5,9 @@ EnableDebugLogs = false
 
 [API]
 Port = 8090
-# The websites that may play streams and post states. "*" allows any.
+# The websites that may play streams and post states. "*" allows any, and
+# "https://*.example.com" allows every subdomain of example.com but not
+# example.com itself.
 AllowedOrigins = ["*"]
 
 [Feed]
