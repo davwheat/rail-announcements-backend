@@ -2,7 +2,10 @@ package hls
 
 import "sync"
 
-// listenerBuffer is how many frames a listener may fall behind: about six seconds.
+// listenerBuffer is how many frames are held for a listener that is not reading,
+// which is about 6.7 seconds. The network buffers between here and the player
+// hold more on top, so this bounds memory, not how far behind a player is. The
+// website's player checks its own lag.
 const listenerBuffer = 256
 
 // Broadcast hands every frame to listeners who take the stream as one endless
@@ -31,8 +34,9 @@ func (b *Broadcast) Add(frame []byte) {
 		select {
 		case listener <- frame:
 		default:
-			// A listener this far behind is no longer hearing announcements on
-			// time. Closing it makes its player reconnect at the live edge.
+			// This listener has stopped reading for longer than its buffer
+			// lasts. Closing it frees the frames, and a player that is still
+			// there reconnects at the live edge.
 			delete(b.listeners, listener)
 			close(listener)
 		}
