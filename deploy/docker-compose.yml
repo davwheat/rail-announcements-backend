@@ -9,15 +9,18 @@ x-replica: &replica
     dockerfile: Dockerfile
   image: rail-announcements-backend:${VERSION:-latest}
   restart: unless-stopped
-  environment:
-    FEED_DARWINBROWSERURL: "${DARWIN_BROWSER_URL:-https://darwinbrowser.com}"
-    # Playback needs no CORS permission. This only governs POST /v1/announcements.
-    API_ALLOWEDORIGINS: "${ALLOWED_ORIGINS:-https://railannouncements.co.uk}"
-    AUDIO_CACHEMB: "${AUDIO_CACHE_MB:-256}"
-    STREAM_MAXSTREAMS: "${MAX_STREAMS:-200}"
   volumes:
     # The audio is the website submodule's, and is not part of the image.
     - ../rail-announcements/audio:/app/rail-announcements/audio:ro
+    # The service's settings, at a path where it looks for them. A replica
+    # without them would allow every origin, so a missing file fails the
+    # mount, where the short syntax would mount an empty directory instead.
+    - type: bind
+      source: ./config.toml
+      target: /config/config.toml
+      read_only: true
+      bind:
+        create_host_path: false
   # Nothing is written outside /tmp, where ffmpeg leaves each rendered MP3
   # for as long as it takes to read it back.
   read_only: true

@@ -74,6 +74,15 @@ if [ ! -d rail-announcements/audio/station/ketech ]; then
 	echo "rail-announcements/audio is missing: run git submodule update --init" >&2
 	exit 1
 fi
+if [ ! -f deploy/config.toml ]; then
+	echo "deploy/config.toml is missing: create it as deploy/README.md describes" >&2
+	exit 1
+fi
+# Rootless Docker runs the replicas as a user that reads the file as "others".
+if [ -z "$(find deploy/config.toml -perm -o=r)" ]; then
+	echo "deploy/config.toml must be readable by everyone: run chmod o+r deploy/config.toml" >&2
+	exit 1
+fi
 
 VERSION="$(git rev-parse --short HEAD)"
 export VERSION
