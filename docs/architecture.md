@@ -1,7 +1,7 @@
 # Architecture
 
-This document explains how the service is put together, why, and how the rest
-of the website's announcement systems move into it.
+This document explains how the service is put together, why, and how it serves
+the website's announcement systems.
 
 ## The pipeline
 
@@ -33,7 +33,10 @@ website.
 | `audio` | The clip library, the renderer and the MP3 encoder. |
 | `hls` | The encoder processes, HLS segments and the playlist, and the broadcast behind the endless MP3 response. |
 | `stream` | A listener's stream: queue, renderer and a real-time mixer that sums its zones. The manager starts and stops streams. |
-| `system` | The registry of announcement systems behind `POST /v1/announcements`. |
+| `system` | The registry behind `POST /v1/announcements`: the `System` interface, and `All`, which every port joins. |
+| `systems/*` | One package for each system the website registers: a tab's option state in, a plan out. |
+| `systems/shared` | What every port needs and none writes twice: button tabs as data, and the national station name table. |
+| `systems/paritytest` | Replays a system's exported record against its port. |
 | `api` | HTTP. |
 
 ## Decisions
@@ -146,31 +149,49 @@ without changes elsewhere.
 
 ## Identical logic, and how that's kept true
 
-The port is tested against the website's output and not against expectations
+The ports are tested against the website's output and not against expectations
 written by hand. The website's `npm run export:backend` runs the real
 TypeScript and records what it does:
 
+- **Every system's tabs.** The export knows no one system: it replaces
+  `playAudioFiles`, runs each tab's play handler over the tab's default state,
+  its presets, every value of every dropdown, generated lists for custom
+  options such as calling points, and seeded random mixes, and records the
+  clips. About 41,000 cases over the 16 systems, replayed by each package's
+  `parity_test.go` through `systems/paritytest`.
 - **Live announcements.** 205 real movements captured from production, each
   turned into every kind of announcement, plus variations that real traffic
   rarely shows: odd platforms, delays, cancellations with every delay code,
   false destinations, request stops, cancelled calls, reversals and bus
   continuations. Both voices, three sets of preferences, about 2,700 cases.
   The test compares every clip, pause and error message.
-- **Posted states.** Each tab's default state and presets, plus generated
-  states for every way a train can divide, be short of a platform, or continue
-  as a bus. About 800 cases.
+- **The KeTech voices' posted states.** Each tab's default state and presets,
+  plus generated states for every way a train can divide, be short of a
+  platform, or continue as a bus. About 800 cases, on top of the generic
+  export's.
 - **Operator names and short platforms.** Table-driven.
 - **The queue.** Scripted scenarios with the website queue's trace after each
   step.
 
-The voices' tables (operators, platforms, delay codes, short platforms) are
-exported as JSON and embedded, so they aren't ported by hand at all.
+A recorded plan wins over a recorded alert. A case holds both what the handler
+played and what it alerted, and a handler that alerts and plays anyway hasn't
+refused the state: the website shows that alert in the browser itself and asks
+this service only for the audio. So the port has to build the plan, and only a
+case that played nothing expects a refusal, with the same message.
 
-## Plan: every announcement system moves here
+A system's data is exported as JSON and embedded, so it isn't ported by hand at
+all: the voices' tables (operators, platforms, delay codes, short platforms),
+each system's own fields and module constants, and the button tabs.
 
-The website holds about 25 systems. Each one turns a tab's option state into a
-list of clips and plays them in the browser. The goal is that the website posts
-the state and plays what comes back:
+A record proves the clip names, and nothing more. `system`'s render test then
+plays a sample of every system's recorded cases through the audio library,
+which is what catches a wrong file prefix or a path rule that names nothing.
+
+## Every announcement system is served here
+
+Each of the website's systems turns a tab's option state into a list of clips
+and plays them in the browser. Every system it registers is ported, so the
+website can post the state and play what comes back instead:
 
 ```
 POST /v1/announcements   {"system", "announcement", "state"}
@@ -178,57 +199,55 @@ POST /v1/announcements   {"system", "announcement", "state"}
   → 4xx/5xx {"error": {"code", "message"}}
 ```
 
-This endpoint exists, and the two KeTech voices answer it for all six of their
-option tabs. The rest of the work repeats one loop for each system.
+A port lives in `internal/systems`, one package for each system, and joins
+`system.All`. It ports the play handlers and nothing else: the system's own
+fields and module constants arrive from the website as JSON, and a button tab
+is data too, so a port answers one by looking the button up. The tab's options,
+presets and state are untouched, which is the point of posting the state as it
+is — the website's forms and saved presets keep working, and `GET /v1/systems`
+tells the page which tabs to post.
 
-### For each system
+### How the website asks
 
-1.  **Export.** Add the system to the website's `tests/backend-parity`
-    generator. The capture is generic: it replaces `playAudioFiles`, runs a
-    tab's play handler, and records the clips. Add the system's data tables to
-    the export when it has any.
-1.  **Port.** Write the system as a Go package that implements
-    `system.System`, and register it in `system.All`. `Plan` receives the tab's
-    state as JSON and returns a `plan.Plan`.
-1.  **Prove.** Replay the exported cases until they pass. A system isn't
-    switched over before that.
-1.  **Switch.** Point the system's tabs at the service. See the next section.
-1.  **Delete.** Remove the TypeScript handler. The Go package becomes the
-    reference, and its exported cases become ordinary golden tests.
+**Announcement audio** is one setting for the whole website, held in
+`serviceAudioState` and shown in the footer. With it on, a pane sets
+`AnnouncementSystem.serviceRequest` to the tab and its state around the tab's
+own play handler, and `playAudioFiles` asks this service for the audio in place
+of joining the clips it was given. A download saves the same bytes as an MP3,
+where the website's own is a WAV.
 
-Suggested order: the remaining station systems first (ScotRail, Atos Anne, Atos
-Matt), because they share the live announcement path and gain live streams at
-the same time. Then the on-train systems, which are many but simple.
+The handler still runs, and that's deliberate: it's what refuses a state that
+can't be announced, and what keeps the Piccadilly line's on-page display in
+step with the audio. Button tabs go through the same path, from a state of
+`{"section", "label"}`. If this service can't be reached, or refuses the state,
+the website falls back to the handler's clips, so the setting never costs a
+listener the announcement. A JSON error stands in for the website's own
+`alert`, and `missing_audio` names the recording, as `showAudioNotExistsError`
+does.
 
-### What changes on the website
+### What's left on the website
 
-- `AnnouncementSystem` gains one method that posts `{system, announcement,
-  state}` and plays the MP3 through `playRenderedAudio`, which already exists
-  for audio that arrives rendered. A download saves the same bytes.
-- A tab's `playHandler` becomes that method. The tab's options, presets and
-  state don't change, and that's the point of posting the state as it is: the
-  website's forms and saved presets keep working.
-- A JSON error replaces today's `alert` calls. `missing_audio` names the
-  recording, as `showAudioNotExistsError` does.
-- The website stops needing the audio CDN for a system once it's switched.
+- **The TypeScript is still the reference.** The website holds both
+  implementations, and its export is what the ports are tested against. A
+  system's Go package becomes the reference only once the TypeScript play
+  handler is deleted, and its exported cases then become ordinary golden tests.
+- **Three systems aren't registered, and aren't ported**: `WMTClass172`,
+  `WMTClass323` and `AvantiPendolino`. Registering one in `AllSystems.ts`
+  brings it into the export, and from there it's an ordinary port.
 
 ### What the service still needs
 
-- **Button tabs.** A `CustomButtonTab` plays a fixed list of clips. Export the
-  lists with the system's data, and address a button as an announcement with
-  the state `{"button": "LABEL"}`. The service doesn't accept raw clip lists
-  from a client.
-- **Per-system file naming.** Some systems override `processAudioFileId`, and
-  train systems pick recordings by pitch. `System` gains a hook that maps a
-  clip ID to a path when the first such system is ported.
 - **Caching.** Identical states are common, because presets are. Cache rendered
-  MP3s by a hash of the canonical request, and consider
-  `GET /v1/announcements/HASH.mp3` behind a CDN if the traffic justifies it.
+  MP3s by a hash of the canonical request, and consider serving them from
+  `GET /v1/announcements/HASH.mp3`, where `HASH` is that hash, behind a CDN if
+  the traffic justifies it.
 - **Limits.** The endpoint runs ffmpeg for each request. Add a concurrency
   limit and a per-client rate limit before it's public.
-- **Live streams for other station systems.** `stream.Voices` looks voices up
-  in `ketech` today. It becomes an interface with `Announce` and
-  `AudioPlatform` when a second family of voices needs it.
+- **Live streams beyond the KeTech voices.** A stream is built by
+  `stream.Voices`, which looks a voice up in `ketech`, so only those two voices
+  have one. It becomes an interface with `Announce` and `AudioPlatform` when a
+  second family of station voices needs a stream; a posted state needs none of
+  that.
 
 ### The other route to the listener
 

@@ -4,22 +4,39 @@ This service speaks station announcements: it reads Darwin Browser's protobuf
 announcement stream, builds announcements from the website's recordings, and
 serves them as one mixed stream for each listener, as HLS
 (`GET /v1/streams/live.m3u8`) or as an endless MP3 response (`live.mp3`). It
-also renders one MP3 for a posted tab state (`POST /v1/announcements`). Read `README.md` for the API and
-`docs/architecture.md` for the design, the decisions and the migration plan.
+also renders one MP3 for a posted tab state (`POST /v1/announcements`), for
+every system the website registers. Read `README.md` for the API and
+`docs/architecture.md` for the design and the decisions.
 
 ## Rules that aren't obvious
 
-- **The website is the reference for announcement logic.** `internal/ketech`
-  and `internal/queue` are ports of the website's TypeScript
-  (https://github.com/davwheat/rail-announcements). Don't change their
-  behavior here first: change the TypeScript, run `npm run export:backend` in
-  the website (not `yarn`: that repository forbids it), and port until
-  `go test ./...` passes. The quirks are deliberate. For example, Celia's named
-  Great Western services are matched case-sensitively, and a short platform's
-  wording uses the end inflection where the middle one looks right.
-- **Don't edit** `internal/ketech/data/`, `internal/*/testdata/parity-*` (the
-  export writes them) or `internal/feed/livepb/` (generated from the feed's
-  protobuf schema, which isn't in this repository).
+- **The website is the reference for announcement logic.** Every package under
+  `internal/systems`, plus `internal/ketech` and `internal/queue`, is a port of
+  the website's TypeScript (https://github.com/davwheat/rail-announcements).
+  Don't change their behavior here first: change the TypeScript, run
+  `npm run export:backend -- PATH_TO_THIS_REPOSITORY` in the website (not
+  `yarn`: that repository forbids it), and port until `go test ./...` passes.
+  The quirks are deliberate. For example, Celia's named Great Western services
+  are matched case-sensitively, and a short platform's wording uses the end
+  inflection where the middle one looks right. A port reproduces an `alert()`
+  message word for word, because the record holds it.
+- **A recorded plan wins over a recorded alert.** A case holds both what the
+  handler played and what it alerted. A handler that alerts and plays anyway
+  hasn't refused the state — the website shows that alert itself and asks this
+  service only for the audio — so the port has to build the plan. Only a case
+  that played nothing expects a refusal.
+- **To add or change a system**, work in the website first: register it in
+  `src/announcement-data/AllSystems.ts` (and name its module in
+  `tests/backend-parity/generate.ts` if it keeps constants beside its class),
+  run the export, write `internal/systems/PKG` to the shape of the other
+  ports, and add it to `All` in `internal/system/system.go`. `PKG` is the
+  system's ID in lower case without the version or the underscores. See
+  "Keep the port in step with the website" in `README.md`.
+- **Don't edit** `internal/ketech/data/`, `internal/systems/*/data/`,
+  `internal/systems/shared/data/`, `internal/systems/*/testdata/` or
+  `internal/*/testdata/parity-*` (the export writes them all), or
+  `internal/feed/livepb/` (generated from the feed's protobuf schema, which
+  isn't in this repository).
 - **`queue.Queue` isn't safe for concurrent use.** `stream.Stream.run` is its
   only caller, on one goroutine. `start` callbacks must not call back into the
   queue: the stream collects started playbacks and handles them after the call

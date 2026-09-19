@@ -5,14 +5,13 @@ the announcement stream of Darwin Browser (darwinbrowser.com), builds each
 announcement from the recordings that
 [railannouncements.co.uk](https://github.com/davwheat/rail-announcements) uses, and serves the result as
 an HTTP Live Stream (HLS). It also renders a single announcement from a posted
-website state, which is how every announcement system on the website moves to
-this service over time.
+website state, for every announcement system the website registers.
 
 The announcement logic is a port of the website's TypeScript. The website stays
 the reference, and the tests here fail on any clip that differs from it. See
 [Keep the port in step with the website](#keep-the-port-in-step-with-the-website).
 
-For the design and the migration plan, see
+For the design and the decisions, see
 [docs/architecture.md](docs/architecture.md). To run it in production, as two
 replicas under rootless Docker with rolling updates, see
 [deploy/README.md](deploy/README.md).
@@ -96,8 +95,25 @@ Content-Type: application/json
 {"system": "AMEY_PHIL_V1", "announcement": "nextTrain", "state": { ... }}
 ```
 
-`state` is the option state of the website tab named by `announcement`,
-unchanged. The response is the MP3 (`audio/mpeg`), or a JSON error:
+Every system the website registers is served, one Go package for each under
+`internal/systems`. `GET /v1/systems` lists them, with the tabs each one
+accepts:
+
+```json
+{"systems": [{"id": "AMEY_PHIL_V1", "name": "Amey/Ditra - Phil Sayer",
+              "announcements": ["nextTrain", "standingTrain", "..."]}]}
+```
+
+`announcement` is one of the system's tab IDs, and `state` is the option state
+of that tab, unchanged. A button tab takes the button's own two names instead:
+
+```json
+{"system": "TFL_DLR_V1", "announcement": "announcementButtons",
+ "state": {"section": "Safety", "label": "Mind the gap please"}}
+```
+
+`section` is the heading the button sits under, and `label` is the button's
+label. The response is the MP3 (`audio/mpeg`), or a JSON error:
 
 ```json
 {"error": {"code": "missing_audio", "message": "audio file not found: station/ketech/phil/station/e/ZZZ.mp3"}}
@@ -127,10 +143,12 @@ they carry speech.
 
 ## Keep the port in step with the website
 
-`internal/ketech` and `internal/queue` are ports of the website's AmeyPhil and
-AmeyCelia systems, its live announcement logic (`src/live/playAnnouncement.ts`)
-and its playback queue (`src/live/playbackQueue.ts`). The website generates what
-the ports are tested against:
+The website is the reference for every announcement this service builds: each
+package under `internal/systems` ports one of its systems, and
+`internal/ketech` and `internal/queue` port the Amey/KeTech voices' live
+announcement logic (`src/live/playAnnouncement.ts`) and playback queue
+(`src/live/playbackQueue.ts`). The website generates what the ports are tested
+against:
 
 ```sh
 npm run export:backend -- PATH_TO_THIS_REPOSITORY
@@ -141,7 +159,30 @@ Run it in a checkout of the website that has the change, and replace
 `rail-announcements` submodule here, which is pinned to a commit and is only
 read for its audio.
 
-That command writes the following files:
+The export is generic. It runs every tab of every registered system
+through the real TypeScript play handler, over the tab's default state, its
+presets, every value of every dropdown, generated lists for custom options such
+as calling points, and seeded random mixes, and records what each would play.
+For each system it writes `internal/systems/PKG`, where `PKG` is the system's
+ID in lower case without the version or the underscores (`TFL_DLR_V1` becomes
+`tfldlr`):
+
+- `testdata/parity.json.gz`: the tab, the state and the clips, for about 41,000
+  cases over the 16 systems.
+- `data/instance.json`: the system class's own fields and getters.
+- `data/module.json`: the constants the handlers read from a module beside the
+  class, for the systems that keep them there.
+- `data/buttons.json`: the button tabs, as tab ID, section and label to clips.
+  A button always plays the same clips, so no port writes one.
+
+It writes one more table, which every port shares:
+
+- `internal/systems/shared/data/stations.json`: the national CRS to station
+  name table, which is what a "no recording for this station" message names a
+  station by.
+
+For the Amey/KeTech voices' live announcements and the playback queue, it
+writes:
 
 - `internal/ketech/data/*.json`: the voices' tables, such as operators,
   platforms, delay reasons and short platforms. The service embeds them.
@@ -153,7 +194,28 @@ That command writes the following files:
   website's queue, with everything the queue did at each step.
 
 To change how an announcement is worded, change the website, run the export,
-and then port the change until `go test ./...` passes.
+and then port the change until `go test ./...` passes. A case that the website
+alerted about and played anyway expects the plan: the website shows its own
+alert and asks this service only for the audio, so the port builds the
+announcement rather than refusing it.
+
+### Add a system
+
+1.  Register the system in the website's
+    `src/announcement-data/AllSystems.ts`. The export covers it from then on.
+    If the system keeps its constants in a module beside its class, add that
+    module to the export's `tests/backend-parity/generate.ts` as well.
+
+1.  Run the export, which writes the system's data and its record.
+
+1.  Write `internal/systems/PKG` to the shape of the other ports: read the
+    exported data, implement `system.System`, hand a button tab to
+    `shared.Buttons`, and copy `parity_test.go` from another package.
+
+1.  Register the system in `internal/system/system.go`, in `All`.
+
+1.  Run `go test ./internal/systems/PKG ./internal/system` until the record and
+    the render test pass.
 
 ## The protobuf code
 
