@@ -66,6 +66,9 @@ Do this once, as the user that runs the service.
     Replace `REPOSITORY_URL` with this repository's URL. The submodule is about
     1.7 GB.
 
+1.  Create `deploy/config.toml`, the service's settings. See
+    [Settings](#settings).
+
 1.  Put a TLS proxy in front of `127.0.0.1:12000`. Rootless Docker can't publish
     a port below 1024, so the stack doesn't terminate TLS itself. The proxy in
     front must not buffer responses, because `live.mp3` is one response that
@@ -102,7 +105,8 @@ Do this once, as the user that runs the service.
 - **No resource limits.** The stack sets none, because rootless Docker only
   enforces them when cgroup v2 delegation is set up for the user. To cap
   memory, set that up first, and then add limits to the `x-replica` block.
-  `AUDIO_CACHE_MB` and `MAX_STREAMS` bound what a replica uses in the meantime.
+  `Audio.CacheMB` and `Stream.MaxStreams` in `config.toml` bound what a
+  replica uses in the meantime.
 
 ## Deploy and update
 
@@ -195,16 +199,42 @@ rebuild the host, replace that setting with the new key, which is in the host's
 
 ## Settings
 
-Set these in the environment, or in a `.env` file in this directory.
+The replicas read their settings from `deploy/config.toml`, which isn't in the
+repository. Create it on the host, and set at least the websites whose pages
+may call the API:
+
+```toml
+[API]
+AllowedOrigins = [
+    "https://railannouncements.co.uk",
+    "https://www.railannouncements.co.uk",
+    "https://*.rail-announcements.pages.dev",
+]
+```
+
+Every other key is optional, and `config.example.toml` lists each one with its
+default.
+
+- `AllowedOrigins` defaults to `"*"`, which allows every website. Write each
+  entry as a browser writes its `Origin` header, with the scheme and without a
+  path. A host that starts with `*.` allows every subdomain of the rest of it.
+- Leave `API.Port`, `Audio.Directory` and `Audio.FFmpeg` at their defaults. The
+  health checks, the proxy, the audio mount and the image depend on them.
+- The file must be readable by everyone, because rootless Docker runs the
+  replicas as another user. `deploy.sh` refuses to deploy when the file is
+  missing or when others can't read it.
+- A replica reads the file when it starts. To apply a change, run
+  `./deploy/deploy.sh --no-pull`, which replaces the replicas one at a time. If
+  the file is invalid, the first replica doesn't start, and the script prints
+  its logs, which name the key, and stops.
+
+The addresses that the stack is published on are Docker Compose's settings, not
+the service's. To change them, set these in a `.env` file in this directory:
 
 | Variable | Meaning | Default |
 |---|---|---|
 | `LISTEN` | The host address and port that the proxy is published on. Send listeners here. | `127.0.0.1:12000` |
 | `LISTEN_BACKEND_1`, `LISTEN_BACKEND_2` | Where each replica is published by itself, for looking at one replica. | `127.0.0.1:12001`, `127.0.0.1:12002` |
-| `DARWIN_BROWSER_URL` | The feed. | `https://darwinbrowser.com` |
-| `ALLOWED_ORIGINS` | The origins that may call `POST /v1/announcements`, separated by commas. `https://*.example.com` allows every subdomain of `example.com`. Playback needs no permission. | `https://railannouncements.co.uk` |
-| `AUDIO_CACHE_MB` | Decoded clips held in memory, for each replica. | `256` |
-| `MAX_STREAMS` | Streams that one replica runs at once. | `200` |
 
 ## Look at it
 

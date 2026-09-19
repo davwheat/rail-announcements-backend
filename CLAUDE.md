@@ -55,7 +55,8 @@ every system the website registers. Read `README.md` for the API and
   second, and Chrome never starts playing a response that slow. Don't switch it
   to AAC to save an encoder.
 - **Logging** is `internal/logging`, a small logrus wrapper whose error methods
-  take the error first. **Config** is Viper with validator tags. `config.toml` is gitignored.
+  take the error first. **Config** is Viper with validator tags. `config.toml` is gitignored, and
+  production reads `deploy/config.toml`.
 - **`rail-announcements/` is a submodule** of the website, and only its
   `audio/` directory is read. Don't edit the website through it: work in the
   website's own checkout. To pick up new recordings, move the submodule to the
