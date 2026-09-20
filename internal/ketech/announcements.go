@@ -301,26 +301,28 @@ func lengthText(n *int) string {
 func (v *Voice) shortPlatformClips(short string, stop portionInfo, afterSplit bool) []string {
 	position, length := splitForm(short)
 	one := length != nil && *length == 1
-	join := func(inflection string) string {
-		if one {
-			return fmt.Sprintf("%s.should join the %s coach only", inflection, position)
+	join := func(shortCoachOfPortionOfTrain bool) []string {
+		if one && !shortCoachOfPortionOfTrain {
+			return []string{fmt.Sprintf("e.should join the %s coach only", position)}
+		} else if one && shortCoachOfPortionOfTrain {
+			return []string{fmt.Sprintf("e.should join the %s", position), "e.coach"}
 		}
-		return fmt.Sprintf("e.should join the %s %s coaches", position, lengthText(length))
+		return []string{fmt.Sprintf("e.should join the %s %s coaches", position, lengthText(length))}
 	}
 	switch {
 	case stop.position == "any":
 		if position == "unknown" {
 			return []string{v.ShortPlatformOptions.UnknownLocation}
 		}
-		return []string{join("e")}
+		return join(false)
 	case !afterSplit:
 		return nil
 	case position == "unknown":
 		return []string{v.ShortPlatformOptions.UnknownLocation}
 	case stop.position == position:
-		return []string{join("e")}
+		return join(false)
 	}
-	files := []string{join("m"), "m.of", "m.the", "m." + stop.position}
+	files := append(join(true), "m.of", "m.the", "m."+stop.position)
 	if stop.length != nil && *stop.length == 1 {
 		return append(files, "e.coach")
 	}
