@@ -86,6 +86,19 @@ the MP3 response everywhere else.
 - **No live edge.** A stall leaves an MP3 player behind for good. The service
   closes a response that falls about six seconds behind, and the website's
   player skips forward when it holds more than four seconds of unplayed audio.
+- **A stall shorter than ten seconds costs no audio.** A player holds the three
+  seconds the response opened with, and audio that arrives in real time never
+  refills them, so a second the mixer skips is a second that listener loses for
+  the rest of the response. A late tick writes everything it makes due in one
+  block, up to `maxCatchUp`, which is ten seconds of audio, and warns that it
+  was late. Only past that bound, where the clock jumped or the host was
+  suspended, is audio dropped, and the mixer says how much.
+- **Decoding gives way to the encoders.** The first announcement on a cold
+  stream decodes dozens of clips, and on a host with few cores those ffmpeg
+  processes compete with the encoders that have to keep real time. Decoding
+  runs three clips at a time (`decodeWorkers`) at low priority (nice 10): an
+  announcement that starts a moment later costs a listener nothing, and audio
+  an encoder is too late to produce is gone.
 
 ### Every stream hears the whole station
 

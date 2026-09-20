@@ -14,7 +14,11 @@ import (
 )
 
 // decodeWorkers bounds the ffmpeg processes one announcement starts at once.
-const decodeWorkers = 8
+// The first announcement on a cold service decodes dozens of clips, and they
+// run beside a stream's two real-time encoders on a host with few cores: a
+// wider decode starves the encoders, and audio a listener never receives is
+// audio lost, while a decode that waits only starts an announcement later.
+const decodeWorkers = 3
 
 // Render joins a plan's clips into one piece of audio. prefix is the voice's
 // own directory, which a clip's Prefix overrides.

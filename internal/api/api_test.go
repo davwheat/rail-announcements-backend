@@ -235,6 +235,84 @@ func TestTheStreamAlsoComesAsOneEndlessResponse(t *testing.T) {
 	}
 }
 
+// TestTheListenersCushionSurvivesAColdFirstAnnouncement holds the mixer to
+// real time. The response arrives at the rate it is played, so audio the
+// service fails to send is taken out of the three seconds a player holds and
+// is never given back: Firefox then waits about fifteen seconds to rebuffer,
+// which costs the listener most of an announcement. The first announcement on
+// a cold stream is where that happens, because it decodes dozens of clips.
+func TestTheListenersCushionSurvivesAColdFirstAnnouncement(t *testing.T) {
+	lib := library(t)
+	upstream := fakeFeed(t)
+	hub, err := feed.NewHub(upstream.URL, testLog{t})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	manager := stream.NewManager(ctx, hub, stream.Voices{Library: lib}, testLog{t}, stream.Options{
+		BitrateKbps: 64, SegmentDuration: time.Second, Window: 6, IdleTimeout: 30 * time.Second, MaxStreams: 2,
+	})
+	server := httptest.NewServer(New(manager, lib, []string{"*"}, testLog{t}).Handler())
+	defer server.Close()
+
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/streams/live.mp3?crs=KGX&chime=none", nil)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("HTTP %d", response.StatusCode)
+	}
+
+	// 64 kbit/s constant, so the bytes received are the audio delivered. The
+	// first listener of a cold stream gets no lead-in, so the clock starts at
+	// the first byte, and the allowance covers the encoder starting up.
+	const bytesPerSecond, allowed = 8000.0, 0.75
+	// A read takes whatever has arrived, so a buffer wide enough for a catch-up
+	// burst keeps the audio that makes up for a late tick from being measured a
+	// fragment at a time, which would read as the shortfall it repairs.
+	buffer := make([]byte, 32<<10)
+	var heard bytes.Buffer
+	var started time.Time
+	worst, report := 0.0, time.Second
+	for {
+		n, err := response.Body.Read(buffer)
+		if started.IsZero() {
+			started = time.Now()
+		}
+		heard.Write(buffer[:n])
+		if err != nil {
+			t.Fatalf("the response ended after %d bytes: %v", heard.Len(), err)
+		}
+		elapsed, received := time.Since(started), float64(heard.Len())/bytesPerSecond
+		worst = max(worst, elapsed.Seconds()-received)
+		if elapsed >= report {
+			t.Logf("t=%4.1fs  audio received=%5.2fs  behind by %+.2fs", elapsed.Seconds(), received, elapsed.Seconds()-received)
+			report += time.Second
+		}
+		if elapsed >= 10*time.Second {
+			break
+		}
+	}
+	if worst > allowed {
+		t.Errorf("the audio fell %.2fs behind the clock, which is more than the %.2fs a player can lose: the mixer dropped audio or the encoder was starved", worst, allowed)
+	}
+
+	// A station that said nothing would keep pace whatever the mixer did, so
+	// the measurement counts only if the announcement played.
+	pcm := decode(t, "mp3", heard.Bytes())
+	loudest := 0
+	for i := 0; i+1 < len(pcm); i += 2 {
+		sample := int(int16(binary.LittleEndian.Uint16(pcm[i:])))
+		loudest = max(loudest, sample, -sample)
+	}
+	if loudest < 5000 {
+		t.Errorf("the stream carried no announcement (peak %d), so nothing was measured through a cold render", loudest)
+	}
+}
+
 func decode(t *testing.T, format string, aac []byte) []byte {
 	t.Helper()
 	cmd := exec.Command("ffmpeg", "-v", "error", "-f", format, "-i", "-", "-f", "s16le", "-ac", "1", "-ar", fmt.Sprint(audio.SampleRate), "-")
