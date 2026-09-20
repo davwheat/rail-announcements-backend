@@ -26,6 +26,12 @@ and `docs/architecture.md` for the design and the decisions.
   hasn't refused the state — the website shows that alert itself and asks this
   service only for the audio — so the port has to build the plan. Only a case
   that played nothing expects a refusal.
+- **Every planned clip must have a recording.** The parity tests fail for a
+  clip that has none, because a listener who skips services with missing audio
+  loses the whole announcement. There's no list of exceptions: fix the wording
+  or the option in the website, or stop offering it, and export again. Only
+  station names in the live record are exempt, because the feed names stations
+  that nobody recorded.
 - **`internal/helppoint` isn't a port.** The website has no help point, so the
   wording is decided here and that package can change first. It answers a
   failure to read the board with a spoken apology and status `200`, on purpose:

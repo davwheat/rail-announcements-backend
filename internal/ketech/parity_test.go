@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"rail-announcements-backend/internal/feed"
 	"rail-announcements-backend/internal/plan"
+	"rail-announcements-backend/internal/systems/paritytest"
 )
+
+const audioDirectory = "../../rail-announcements/audio"
 
 // The files in testdata are written by the website's `npm run export:backend`
 // from the TypeScript these voices were ported from. Every test here replays
@@ -98,6 +102,7 @@ func TestLiveAnnouncementsMatchTheWebsite(t *testing.T) {
 		} `json:"platforms"`
 	}](t, "parity-live.json.gz")
 
+	recordings := paritytest.OpenRecordings(t, audioDirectory)
 	failures, plans := 0, 0
 	for index, c := range cases {
 		details := c.Details
@@ -128,6 +133,7 @@ func TestLiveAnnouncementsMatchTheWebsite(t *testing.T) {
 				continue
 			}
 			got, err := voice.Announce(c.Announcement, c.Preferences, spoken)
+			recordings.Check(t, voice.FilePrefix, label, withoutStations(got.Plan.Clips))
 			if !want.Outcome.check(t, label, got.Plan, err) {
 				failures++
 			}
@@ -142,6 +148,20 @@ func TestLiveAnnouncementsMatchTheWebsite(t *testing.T) {
 	if plans < 1000 {
 		t.Fatalf("only %d plans were compared", plans)
 	}
+	recordings.Report(t)
+}
+
+// withoutStations leaves out the station names. The feed names stations that
+// no voice has recorded, and the listener's missing audio mode covers those.
+// Every other clip is wording that the voice chose, so it must exist.
+func withoutStations(clips []plan.Clip) []plan.Clip {
+	var out []plan.Clip
+	for _, clip := range clips {
+		if !strings.HasPrefix(clip.ID, "station.") {
+			out = append(out, clip)
+		}
+	}
+	return out
 }
 
 func TestPostedStatesMatchTheWebsite(t *testing.T) {
@@ -154,10 +174,14 @@ func TestPostedStatesMatchTheWebsite(t *testing.T) {
 	if len(cases) < 50 {
 		t.Fatalf("only %d states", len(cases))
 	}
+	recordings := paritytest.OpenRecordings(t, audioDirectory)
 	for _, c := range cases {
-		got, err := Voices[c.Voice].PlanState(c.Announcement, c.State)
+		voice := Voices[c.Voice]
+		got, err := voice.PlanState(c.Announcement, c.State)
 		c.Outcome.check(t, c.Voice+" "+c.Announcement, got, err)
+		recordings.Check(t, voice.FilePrefix, c.Voice+" "+c.Announcement, got.Clips)
 	}
+	recordings.Report(t)
 }
 
 func TestOperatorNamesMatchTheWebsite(t *testing.T) {

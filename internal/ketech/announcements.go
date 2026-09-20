@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"rail-announcements-backend/internal/plan"
@@ -233,7 +234,7 @@ func (v *Voice) splitInfo(callingAt []CallingPoint, terminating string, overallL
 	after := append(slices.Clone(callingAt[divide+1:]), CallingPoint{CRSCode: terminating})
 
 	form := "front.1"
-	if point.SplitForm != nil {
+	if point.SplitForm != nil && *point.SplitForm != "" {
 		form = *point.SplitForm
 	}
 	bPos, bCount := splitForm(form)
@@ -259,10 +260,16 @@ func (v *Voice) splitInfo(callingAt []CallingPoint, terminating string, overallL
 		for i, p := range before {
 			upTo[i] = splitStop{p.CRSCode, p.ShortPlatform, p.RequestStop, portionInfo{"any", nil}}
 		}
+		// This portion's length comes from the split form, so it's known even
+		// when the train's isn't.
+		bLength := bCount
+		if bLength != nil && *bLength == 0 {
+			bLength = nil
+		}
 		return splitInfo{
 			divideType: point.SplitType,
 			stopsUpTo:  upTo,
-			splitB:     &splitPortion{unknown(point.SplitCallingPoints, bPos), bPos, nil},
+			splitB:     &splitPortion{unknown(point.SplitCallingPoints, bPos), bPos, bLength},
 			splitA:     &splitPortion{unknown(after, aPos), aPos, nil},
 		}
 	}
@@ -305,7 +312,8 @@ func (v *Voice) shortPlatformClips(short string, stop portionInfo, afterSplit bo
 		if one && !shortCoachOfPortionOfTrain {
 			return []string{fmt.Sprintf("e.should join the %s coach only", position)}
 		} else if one && shortCoachOfPortionOfTrain {
-			return []string{fmt.Sprintf("e.should join the %s", position), "e.coach"}
+			// No voice has "should join the … coach only" with a middle inflection.
+			return []string{fmt.Sprintf("m.should join the %s", position), "m.coach"}
 		}
 		return []string{fmt.Sprintf("e.should join the %s %s coaches", position, lengthText(length))}
 	}
@@ -463,16 +471,20 @@ func (v *Voice) callingPointsWithSplits(callingAt []CallingPoint, terminating st
 	switch split.divideType {
 	case "splitTerminates":
 		files = append(files, divide...)
-		if split.splitB.position == "unknown" {
-			files = append(files, clip("s.please note that", 400), plan.Clip{ID: "m.coaches"}, plan.Clip{ID: "m.will be detached and will terminate at"})
-		} else {
+		terminatesAt := plan.Clip{ID: "station.e." + splitPoint.crsCode}
+		if b := split.splitB; b.position != "unknown" && b.length != nil {
 			coaches := "coach"
-			if split.splitB.length == nil || *split.splitB.length != 1 {
-				coaches = lengthText(split.splitB.length) + " coaches"
+			if *b.length != 1 {
+				coaches = lengthText(b.length) + " coaches"
 			}
-			files = append(files, clip("s.please note that the "+split.splitB.position, 400), plan.Clip{ID: "m." + coaches + " will detach at"})
+			files = append(files, clip("s.please note that the "+b.position, 400), plan.Clip{ID: "m." + coaches + " will detach at"}, terminatesAt)
+		} else if ids := v.SplitOptions.DetachesAndTerminatesIDs; ids != nil {
+			note := "s.please note that"
+			if b.position != "unknown" {
+				note += " the " + b.position
+			}
+			files = append(append(append(files, clip(note, 400)), plan.IDs(ids...)...), terminatesAt)
 		}
-		files = append(files, plan.Clip{ID: "station.e." + splitPoint.crsCode})
 	case "splits":
 		files = append(files, divide...)
 		if len(split.splitB.stops) == 0 {
@@ -500,7 +512,7 @@ func (v *Voice) callingPointsWithSplits(callingAt []CallingPoint, terminating st
 			return nil
 		}
 		if p.position == "unknown" {
-			return append(listStops(stops), plan.Clip{ID: "w.please listen for announcements on board the train"})
+			return append(listStops(stops), plan.Clip{ID: v.ShortPlatformOptions.UnknownLocation})
 		}
 		return append(listStops(stops), shouldTravelIn(p.length, p.position)...)
 	}
@@ -578,7 +590,7 @@ func (v *Voice) forThePlatform(platform string, delayed bool, delay int) clips {
 	switch {
 	case platform == "0":
 		return clips{clip(v.GenericOptions.Platform, delay), {ID: "m.0"}, forThe}
-	case numeric && n <= 12, lower == "a", lower == "b":
+	case numeric && n <= 12, slices.Contains(v.GenericOptions.LetteredPlatformsWithForThe, lower):
 		files := clips{clip("s.platform "+platform+" for the", delay)}
 		if delayed {
 			files = append(files, plan.Clip{ID: "m.delayed"})
@@ -634,7 +646,27 @@ func mode(m plan.MissingAudioMode) plan.MissingAudioMode {
 	return m
 }
 
+// platformProblem refuses a platform that can't be spoken: the voice doesn't
+// offer it, and the minute recordings that stand in for 21 and above don't
+// cover it.
+func (v *Voice) platformProblem(platform string) error {
+	if slices.Contains(v.Platforms, strings.ToLower(platform)) {
+		return nil
+	}
+	if n, err := strconv.Atoi(platform); err == nil && allDigits(platform) && n >= 21 && n <= 59 {
+		return nil
+	}
+	return fmt.Errorf("Platform %s is not available with this announcement system.", platform)
+}
+
+func allDigits(s string) bool {
+	return s != "" && strings.IndexFunc(s, func(r rune) bool { return r < '0' || r > '9' }) == -1
+}
+
 func (v *Voice) NextTrain(o TrainOptions) (plan.Plan, error) {
+	if err := v.platformProblem(o.Platform); err != nil {
+		return plan.Plan{}, err
+	}
 	if o.Chime == "" {
 		o.Chime = v.DefaultChime
 	}
@@ -667,6 +699,9 @@ func (v *Voice) NextTrain(o TrainOptions) (plan.Plan, error) {
 }
 
 func (v *Voice) StandingTrain(o TrainOptions) (plan.Plan, error) {
+	if err := v.platformProblem(o.Platform); err != nil {
+		return plan.Plan{}, err
+	}
 	length := o.coachCount()
 	files := clips{{ID: "station.m." + o.ThisStationCode}, {ID: v.StandingOptions.ThisIsID}, {ID: "station.e." + o.ThisStationCode}}
 	if o.MindTheGap {
@@ -799,6 +834,9 @@ func (v *Voice) DisruptedTrain(o DisruptedOptions) (plan.Plan, error) {
 }
 
 func (v *Voice) FastTrain(o FastTrainOptions) (plan.Plan, error) {
+	if err := v.platformProblem(o.Platform); err != nil {
+		return plan.Plan{}, err
+	}
 	if o.Chime == "" {
 		o.Chime = v.DefaultChime
 	}
@@ -806,7 +844,7 @@ func (v *Voice) FastTrain(o FastTrainOptions) (plan.Plan, error) {
 	n, numeric := jsParseInt(o.Platform)
 	platform := "platform.e." + o.Platform
 	if o.Platform == "0" {
-		platform = "e.0"
+		platform = v.GenericOptions.PlatformZeroE
 	} else if numeric && n > 20 {
 		platform = "mins.e." + o.Platform
 	}
@@ -825,6 +863,9 @@ func isDigits(s string) bool {
 }
 
 func (v *Voice) TrainApproaching(o ApproachingOptions) (plan.Plan, error) {
+	if err := v.platformProblem(o.Platform); err != nil {
+		return plan.Plan{}, err
+	}
 	if o.Chime == "" {
 		o.Chime = v.DefaultChime
 	}
@@ -880,6 +921,12 @@ func platformNumber(platform, inflection string) plan.Clip {
 }
 
 func (v *Voice) PlatformAlteration(o AlterationOptions) (plan.Plan, error) {
+	if err := v.platformProblem(o.OldPlatform); err != nil {
+		return plan.Plan{}, err
+	}
+	if err := v.platformProblem(o.NewPlatform); err != nil {
+		return plan.Plan{}, err
+	}
 	if o.Chime == "" {
 		o.Chime = v.DefaultChime
 	}

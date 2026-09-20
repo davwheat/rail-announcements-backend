@@ -41,7 +41,9 @@ type Voice struct {
 	BeforeSectionDelay int    `json:"beforeSectionDelay"`
 	ShortDelay         int    `json:"shortDelay"`
 	GenericOptions     struct {
-		Platform string `json:"platform"`
+		Platform                    string   `json:"platform"`
+		PlatformZeroE               string   `json:"platformZeroE"`
+		LetteredPlatformsWithForThe []string `json:"letteredPlatformsWithForThe"`
 	} `json:"genericOptions"`
 	CallingPointsOptions struct {
 		BeforeCallingAtDelay int    `json:"beforeCallingAtDelay"`
@@ -63,6 +65,8 @@ type Voice struct {
 	SplitOptions struct {
 		TravelInCorrectPartID []string `json:"travelInCorrectPartId"`
 		TravelInAnyPartIDs    []string `json:"travelInAnyPartIds"`
+		// DetachesAndTerminatesIDs is nil for a voice that has no such wording.
+		DetachesAndTerminatesIDs []string `json:"detachesAndTerminatesIds"`
 	} `json:"splitOptions"`
 	DisruptionOptions struct {
 		ThisStationAudio string `json:"thisStationAudio"`

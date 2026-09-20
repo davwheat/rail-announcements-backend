@@ -108,7 +108,7 @@ func (s *System) nextTrain(state json.RawMessage) (plan.Plan, error) {
 
 	coaches := "coaches"
 	if o.Coaches.isLiteral("1") {
-		coaches = "coach"
+		coaches = "coach only"
 	}
 	clips = append(clips, plan.Clip{ID: fmt.Sprintf("formation.this train is formed of %s %s", o.Coaches.text, coaches)})
 
