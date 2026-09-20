@@ -17,6 +17,10 @@ Darwin Browser ──protobuf──▶ feed.Hub ──▶ stream.Stream ──�
                                      listener ◀── MP3 ◀── hls.Broadcast ◀── hls.Encoder (MP3, on demand)
 
 POST /v1/announcements ──▶ system.System.Plan ──▶ plan.Plan ──▶ Render ──▶ MP3
+
+GET /v1/help-points/CRS ──▶ helppoint.Board ──▶ helppoint.Departures ──▶ plan.Plan ──▶ Render ──▶ MP3
+                            Darwin Browser's     what to say
+                            /v1/departures
 ```
 
 Everything meets at `plan.Plan`: a list of clips, each with the silence that
@@ -37,6 +41,7 @@ website.
 | `systems/*` | One package for each system the website registers: a tab's option state in, a plan out. |
 | `systems/shared` | What every port needs and none writes twice: button tabs as data, and the national station name table. |
 | `systems/paritytest` | Replays a system's exported record against its port. |
+| `helppoint` | The spoken departure board: Darwin Browser's board in, a plan in Phil's voice out. |
 | `api` | HTTP. |
 
 ## Decisions
@@ -271,3 +276,35 @@ the three steps such a renderer needs. HLS was chosen for the website because
 the listener's voices and zones are the listener's choice, which a shared
 stream of announcements can't carry. Audio in the feed still suits a client
 that wants one fixed voice and no player logic.
+
+## The help point
+
+`GET /v1/help-points/CRS` speaks a station's departure board, the way the
+button on a platform help point does. `helppoint.Board` reads the next 90
+minutes of passenger trains, to a limit of eight, from Darwin Browser's
+`/v1/departures`, and `helppoint.Departures` turns them into a plan in Phil's
+voice. The renderer and the MP3 encoder are the ones a posted state uses.
+
+The package isn't a port. The website has no help point, so there is no record
+to compare with, and the wording is decided here. It borrows two things from
+`ketech`: Phil's file prefix, and the website's table of delay codes.
+
+Three decisions shape it:
+
+-   **A missing recording is left out.** The plan's missing audio mode is
+    `play-silence`. A board names stations that Phil never recorded, and a
+    listener is better served by a board with one gap than by no board. Where
+    a gap would mislead, the package asks the library first: a reason is spoken
+    only when every clip of it exists, so "due to" is never left alone.
+-   **A combined recording is preferred.** Phil recorded "the next service from
+    platform 4 will be the" and "Southern service to" as single clips for most
+    platforms and operators. The package asks `audio.Library.Exists` for the
+    combined clip, and joins the parts when there is none.
+-   **A failure is spoken.** When the board can't be read, the response is
+    still `200` and an MP3: "We regret that the information facility is not in
+    operation." What plays the response has a listener and no screen, and a
+    browser's `<audio>` element plays nothing for an error status. Only a
+    request that is itself wrong gets a JSON error.
+
+The endpoint holds nothing between requests, so the proxy sends it to either
+replica.

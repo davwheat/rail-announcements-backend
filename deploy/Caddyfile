@@ -34,7 +34,8 @@
 		}
 	}
 
-	# Rendering one announcement needs nothing from an earlier request.
+	# Rendering one announcement, or one help point's departure board, needs
+	# nothing from an earlier request.
 	handle {
 		reverse_proxy backend-1:8090 backend-2:8090 {
 			lb_policy round_robin

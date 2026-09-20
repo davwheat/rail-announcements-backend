@@ -59,6 +59,8 @@ const maxReported = 12
 // Run replays the record at path, which is testdata/parity.json.gz in a
 // system's package. A case which the website played expects that plan and no
 // error; only one which played nothing expects the recorded refusal.
+//
+// Every clip the port plans must also have a recording.
 func Run(t *testing.T, sys System, path string) {
 	t.Helper()
 	raw, err := os.ReadFile(path)
@@ -91,6 +93,7 @@ func Run(t *testing.T, sys System, path string) {
 		t.Fatal("the record holds no cases")
 	}
 
+	recordings := OpenRecordings(t, audioDirectory)
 	failed := map[string]int{}
 	total := map[string]int{}
 	reported := 0
@@ -100,6 +103,7 @@ func Run(t *testing.T, sys System, path string) {
 			t.Fatalf("case %d plays %d times, which one plan cannot describe", index, len(c.Calls))
 		}
 		got, err := sys.Plan(c.Tab, c.State)
+		recordings.Check(t, sys.FilePrefix(), fmt.Sprintf("case %d, tab %s", index, c.Tab), got.Clips)
 		problem := compare(got, err, c.Calls, c.Error)
 		if problem == "" {
 			continue
@@ -114,6 +118,7 @@ func Run(t *testing.T, sys System, path string) {
 			t.Errorf("%s: %d of %d cases differ from the website", tab, failed[tab], count)
 		}
 	}
+	recordings.Report(t)
 }
 
 // compare reports how the port differs from one recorded case, or "" when it

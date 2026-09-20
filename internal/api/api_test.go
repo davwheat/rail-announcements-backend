@@ -23,6 +23,7 @@ import (
 	"rail-announcements-backend/internal/audio"
 	"rail-announcements-backend/internal/feed"
 	"rail-announcements-backend/internal/feed/livepb"
+	"rail-announcements-backend/internal/helppoint"
 	"rail-announcements-backend/internal/stream"
 )
 
@@ -127,7 +128,7 @@ func TestAListenerHearsAnAnnouncementOverHLS(t *testing.T) {
 	manager := stream.NewManager(ctx, hub, stream.Voices{Library: lib}, testLog{t}, stream.Options{
 		BitrateKbps: 64, SegmentDuration: time.Second, Window: 6, IdleTimeout: 30 * time.Second, MaxStreams: 2,
 	})
-	server := httptest.NewServer(New(manager, lib, []string{"*"}, testLog{t}).Handler())
+	server := httptest.NewServer(New(manager, lib, nil, []string{"*"}, testLog{t}).Handler())
 	defer server.Close()
 
 	playlistURL := server.URL + "/v1/streams/live.m3u8?crs=KGX&chime=none"
@@ -205,7 +206,7 @@ func TestTheStreamAlsoComesAsOneEndlessResponse(t *testing.T) {
 	manager := stream.NewManager(ctx, hub, stream.Voices{Library: lib}, testLog{t}, stream.Options{
 		BitrateKbps: 64, SegmentDuration: time.Second, Window: 6, IdleTimeout: 30 * time.Second, MaxStreams: 2,
 	})
-	server := httptest.NewServer(New(manager, lib, []string{"*"}, testLog{t}).Handler())
+	server := httptest.NewServer(New(manager, lib, nil, []string{"*"}, testLog{t}).Handler())
 	defer server.Close()
 
 	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/streams/live.mp3?crs=KGX&zone=1,2&zone=3", nil)
@@ -253,7 +254,7 @@ func TestTheListenersCushionSurvivesAColdFirstAnnouncement(t *testing.T) {
 	manager := stream.NewManager(ctx, hub, stream.Voices{Library: lib}, testLog{t}, stream.Options{
 		BitrateKbps: 64, SegmentDuration: time.Second, Window: 6, IdleTimeout: 30 * time.Second, MaxStreams: 2,
 	})
-	server := httptest.NewServer(New(manager, lib, []string{"*"}, testLog{t}).Handler())
+	server := httptest.NewServer(New(manager, lib, nil, []string{"*"}, testLog{t}).Handler())
 	defer server.Close()
 
 	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/streams/live.mp3?crs=KGX&chime=none", nil)
@@ -342,7 +343,7 @@ func TestAPostedStateComesBackAsAnMP3OrAJSONError(t *testing.T) {
 	lib := library(t)
 	hub, _ := feed.NewHub("http://127.0.0.1:1", testLog{t})
 	manager := stream.NewManager(context.Background(), hub, stream.Voices{Library: lib}, testLog{t}, stream.Options{MaxStreams: 1})
-	server := httptest.NewServer(New(manager, lib, []string{"https://railannouncements.co.uk"}, testLog{t}).Handler())
+	server := httptest.NewServer(New(manager, lib, nil, []string{"https://railannouncements.co.uk"}, testLog{t}).Handler())
 	defer server.Close()
 
 	file, err := os.Open("../ketech/testdata/parity-state.json.gz")
@@ -415,7 +416,7 @@ func TestAPostedStateComesBackAsAnMP3OrAJSONError(t *testing.T) {
 func TestBadZonesAreRefused(t *testing.T) {
 	hub, _ := feed.NewHub("http://127.0.0.1:1", testLog{t})
 	manager := stream.NewManager(context.Background(), hub, nil, testLog{t}, stream.Options{MaxStreams: 1})
-	server := httptest.NewServer(New(manager, nil, []string{"*"}, testLog{t}).Handler())
+	server := httptest.NewServer(New(manager, nil, nil, []string{"*"}, testLog{t}).Handler())
 	defer server.Close()
 	for _, query := range []string{"", "?crs=KGX&voice=anne", "?crs=KGX&type=arriving"} {
 		response, err := http.Get(server.URL + "/v1/streams/live.m3u8" + query)
@@ -428,5 +429,77 @@ func TestBadZonesAreRefused(t *testing.T) {
 	}
 	if response, _ := http.Get(server.URL + "/v1/streams/nope/1.aac"); response.StatusCode != http.StatusNotFound {
 		t.Errorf("unknown segment: HTTP %d", response.StatusCode)
+	}
+}
+
+func TestAHelpPointSpeaksTheDepartureBoard(t *testing.T) {
+	lib := library(t)
+	darwinBrowser := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("crs") {
+		case "KGX":
+			io.WriteString(w, `{"services": [{"toc": "GR", "planned_dep": "2026-07-14T09:00:00+01:00", "platform": "4",
+				"exp_dep": {"t": "09:12:00"}, "late_reason_code": "100", "coach_count": 9,
+				"destinations": [{"crs": "EDB", "via": {"locs": ["YRK"]}}]}]}`)
+		case "ZZZ":
+			http.Error(w, "no such station", http.StatusNotFound)
+		default:
+			http.Error(w, "the database is away", http.StatusBadGateway)
+		}
+	}))
+	defer darwinBrowser.Close()
+	board, err := helppoint.NewBoard(darwinBrowser.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(New(nil, lib, board, []string{"*"}, testLog{t}).Handler())
+	defer server.Close()
+
+	seconds := func(crs string) float64 {
+		t.Helper()
+		response, err := http.Get(server.URL + "/v1/help-points/" + crs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		body, _ := io.ReadAll(response.Body)
+		if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "audio/mpeg" {
+			t.Fatalf("%s: status %d, %s: %s", crs, response.StatusCode, response.Header.Get("Content-Type"), body)
+		}
+		decode := exec.Command("ffmpeg", "-v", "error", "-i", "-", "-f", "s16le", "-ac", "1", "-ar", "44100", "-")
+		decode.Stdin = bytes.NewReader(body)
+		pcm, err := decode.Output()
+		if err != nil {
+			t.Fatalf("%s: the response isn't an MP3: %v", crs, err)
+		}
+		return float64(len(pcm)) / 2 / 44100
+	}
+
+	spoken, unavailable := seconds("kgx"), seconds("CBG")
+	if spoken < 20 {
+		t.Errorf("the board lasts %.1f seconds, which is too short to hold a delayed service", spoken)
+	}
+	// The apology is four sentences with two one-second pauses.
+	if unavailable < 6 || unavailable > 15 {
+		t.Errorf("a help point with no board spoke for %.1f seconds, want the apology", unavailable)
+	}
+
+	for path, want := range map[string]struct {
+		status int
+		code   string
+	}{
+		"/v1/help-points/ZZZ":  {http.StatusNotFound, "unknown_station"},
+		"/v1/help-points/KGXX": {http.StatusBadRequest, "bad_crs"},
+		"/v1/help-points/K.X":  {http.StatusBadRequest, "bad_crs"},
+	} {
+		response, err := http.Get(server.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body struct{ Error apiError }
+		json.NewDecoder(response.Body).Decode(&body)
+		response.Body.Close()
+		if response.StatusCode != want.status || body.Error.Code != want.code {
+			t.Errorf("%s: status %d, code %q, want %d, %q", path, response.StatusCode, body.Error.Code, want.status, want.code)
+		}
 	}
 }

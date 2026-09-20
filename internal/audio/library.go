@@ -97,6 +97,16 @@ func (l *Library) Path(prefix, id string) (string, error) {
 	return filepath.Join(l.root, relative), nil
 }
 
+// Exists reports whether a clip has a recording.
+func (l *Library) Exists(prefix, id string) bool {
+	path, err := l.Path(prefix, id)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
 // Clip returns a clip's decoded audio, or ErrMissing.
 func (l *Library) Clip(ctx context.Context, prefix, id string) (PCM, error) {
 	path, err := l.Path(prefix, id)
