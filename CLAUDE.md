@@ -54,6 +54,15 @@ every system the website registers. Read `README.md` for the API and
 - **The endless response is MP3 on purpose.** AAC silence is about 500 bytes a
   second, and Chrome never starts playing a response that slow. Don't switch it
   to AAC to save an encoder.
+- **The mixer catches up after a late tick instead of dropping audio.** An MP3
+  listener holds the three seconds the response opened with, and a constant bit
+  rate stream never refills them, so a second the mixer skips is a second that
+  listener loses for the rest of the response — Firefox then waits about
+  fifteen seconds to rebuffer. A late tick writes everything due in one block,
+  up to `maxCatchUp` (ten seconds of audio), and warns that it was late; past
+  that bound the clock jumped, and the audio dropped is logged. Don't reinstate
+  the drop as an optimization. For the same reason clip decoding is three
+  ffmpeg processes at nice 10, out of the encoders' way.
 - **Logging** is `internal/logging`, a small logrus wrapper whose error methods
   take the error first. **Config** is Viper with validator tags. `config.toml` is gitignored, and
   production reads `deploy/config.toml`.

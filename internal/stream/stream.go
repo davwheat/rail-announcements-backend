@@ -21,6 +21,21 @@ const (
 	// late an announcement starts, and is far below a segment's length.
 	mixInterval   = 50 * time.Millisecond
 	renderTimeout = 60 * time.Second
+
+	// maxCatchUp bounds the audio one block carries after a late tick. An MP3
+	// listener holds the three seconds its response opened with and a
+	// constant-bit-rate stream never refills them, so audio the mixer skips
+	// comes out of that cushion for the rest of the response. A stall this long
+	// or shorter is written in full instead. Past the bound the clock jumped or
+	// the host was suspended, and an hour of catch-up buys a listener nothing.
+	maxCatchUp = 10 * time.Second
+	// lateBlock is how much audio has to be due for a tick to be worth
+	// reporting. A block is mixInterval long, and a few milliseconds over that
+	// is a healthy host.
+	lateBlock = 500 * time.Millisecond
+	// lateInterval rate-limits the late warning. A host that ticks late once
+	// ticks late again, and the log is read for the first one.
+	lateInterval = 10 * time.Second
 )
 
 // Renderer produces the audio for one announcement in one zone.
@@ -130,6 +145,84 @@ func mix(block, speech []byte) {
 	}
 }
 
+// samplesFor is the number of samples that fill d.
+func samplesFor(d time.Duration) int64 { return int64(d) * audio.SampleRate / int64(time.Second) }
+
+// durationOf is how long n samples last.
+func durationOf(n int64) time.Duration { return time.Duration(n) * time.Second / audio.SampleRate }
+
+// mixer writes one block of audio for each tick. It holds everything a tick
+// touches, which keeps run a loop around it and lets a test drive ticks from a
+// clock of its own.
+type mixer struct {
+	stream  *Stream
+	queue   *queue.Queue
+	begin   func()
+	encoder Encoder
+
+	epoch   time.Time
+	written int64
+	voices  []*speaking
+	// warned is when the late warning was last logged.
+	warned time.Time
+}
+
+// tick writes the audio due at now: silence, plus whatever the stream's zones
+// are saying. It reports how many samples that was.
+func (m *mixer) tick(now time.Time) (int64, error) {
+	due := samplesFor(now.Sub(m.epoch)) - m.written
+	if due <= 0 {
+		return 0, nil
+	}
+	if behind := durationOf(due); behind > lateBlock && now.Sub(m.warned) >= lateInterval {
+		m.warned = now
+		m.stream.log.Warnf("A mix tick was %s late: writing %s of audio in one block",
+			(behind - mixInterval).Round(time.Millisecond), behind.Round(time.Millisecond))
+	}
+	if bound := samplesFor(maxCatchUp); due > bound {
+		m.stream.log.Warnf("Dropping %s of audio: the mixer is %s behind real time, past the %s it catches up",
+			durationOf(due-bound).Round(time.Millisecond), durationOf(due).Round(time.Millisecond), maxCatchUp)
+		m.written += due - bound
+		due = bound
+	}
+
+	block := make([]byte, due*2)
+	m.fill(block)
+	if _, err := m.encoder.Write(block); err != nil {
+		return 0, fmt.Errorf("encoder: %w", err)
+	}
+	if radio := m.stream.radio.Load(); radio != nil {
+		if _, err := radio.Write(block); err != nil {
+			return 0, fmt.Errorf("radio encoder: %w", err)
+		}
+	}
+	m.written += due
+	return due, nil
+}
+
+// fill mixes the speaking announcements into block, each from where it left
+// off, and hands the queue back the ones that end in it.
+func (m *mixer) fill(block []byte) {
+	finished := false
+	m.voices = slices.DeleteFunc(m.voices, func(voice *speaking) bool {
+		if voice.playback.Context().Err() != nil {
+			return true
+		}
+		n := min(len(block), len(voice.pcm))
+		mix(block, voice.pcm[:n])
+		voice.pcm = voice.pcm[n:]
+		if len(voice.pcm) > 0 {
+			return false
+		}
+		m.queue.Finished(voice.playback, nil)
+		finished = true
+		return true
+	})
+	if finished {
+		m.begin()
+	}
+}
+
 // run mixes until ctx ends. Everything that touches the queue happens on this
 // goroutine, which is what lets the queue go without locks.
 func (s *Stream) run(ctx context.Context, messages <-chan any, encoder Encoder) error {
@@ -148,7 +241,6 @@ func (s *Stream) run(ctx context.Context, messages <-chan any, encoder Encoder) 
 		func(err error) { s.log.Warnf("Announcement skipped: %v", err) },
 	)
 
-	var current []*speaking
 	// begin deals with what the queue started during the call that just returned.
 	// Finishing one announcement can start another, so it runs until none are left.
 	begin := func() {
@@ -173,8 +265,7 @@ func (s *Stream) run(ctx context.Context, messages <-chan any, encoder Encoder) 
 
 	ticker := time.NewTicker(mixInterval)
 	defer ticker.Stop()
-	epoch := s.now()
-	written := int64(0)
+	mixing := &mixer{stream: s, queue: q, begin: begin, encoder: encoder, epoch: s.now()}
 
 	for {
 		select {
@@ -226,49 +317,14 @@ func (s *Stream) run(ctx context.Context, messages <-chan any, encoder Encoder) 
 			case result.err != nil || !result.playback.Valid() || len(result.pcm) == 0:
 				q.Finished(result.playback, result.err)
 			default:
-				current = append(current, &speaking{result.playback, result.pcm})
+				mixing.voices = append(mixing.voices, &speaking{result.playback, result.pcm})
 			}
 			begin()
 
 		case <-ticker.C:
-			due := int64(s.now().Sub(epoch))*audio.SampleRate/int64(time.Second) - written
-			if due <= 0 {
-				continue
+			if _, err := mixing.tick(s.now()); err != nil {
+				return err
 			}
-			// A stall longer than this is not worth catching up on: the listener's
-			// player has already run dry, and a burst would only delay what follows.
-			if due > audio.SampleRate {
-				written += due - audio.SampleRate
-				due = audio.SampleRate
-			}
-			block := make([]byte, due*2)
-			finished := false
-			current = slices.DeleteFunc(current, func(voice *speaking) bool {
-				if voice.playback.Context().Err() != nil {
-					return true
-				}
-				n := min(len(block), len(voice.pcm))
-				mix(block, voice.pcm[:n])
-				voice.pcm = voice.pcm[n:]
-				if len(voice.pcm) > 0 {
-					return false
-				}
-				q.Finished(voice.playback, nil)
-				finished = true
-				return true
-			})
-			if finished {
-				begin()
-			}
-			if _, err := encoder.Write(block); err != nil {
-				return fmt.Errorf("encoder: %w", err)
-			}
-			if radio := s.radio.Load(); radio != nil {
-				if _, err := radio.Write(block); err != nil {
-					return fmt.Errorf("radio encoder: %w", err)
-				}
-			}
-			written += due
 		}
 	}
 }

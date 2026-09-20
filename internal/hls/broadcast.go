@@ -3,10 +3,12 @@ package hls
 import "sync"
 
 // listenerBuffer is how many frames are held for a listener that is not reading,
-// which is about 6.7 seconds. The network buffers between here and the player
-// hold more on top, so this bounds memory, not how far behind a player is. The
-// website's player checks its own lag.
-const listenerBuffer = 256
+// which is about 15 seconds. It has to exceed the longest burst the mixer writes
+// after a stall, which is ten seconds: a smaller buffer fills during that burst
+// and closes every listener, which is the loss the burst exists to prevent. The
+// network buffers between here and the player hold more on top, so this bounds
+// memory, not how far behind a player is. The website's player checks its own lag.
+const listenerBuffer = 576
 
 // Broadcast hands every frame to listeners who take the stream as one endless
 // response, the way internet radio is served.

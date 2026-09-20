@@ -154,8 +154,15 @@ func (l *Library) decode(ctx context.Context, path string) (PCM, error) {
 	cmd := exec.CommandContext(ctx, l.ffmpeg, "-v", "error", "-nostdin", "-i", path,
 		"-map", "0:a:0", "-af", "pan=mono|c0=c0", "-ar", fmt.Sprint(SampleRate), "-f", "s16le", "-")
 	cmd.Stdout, cmd.Stderr = &out, &problems
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("decode %s: %w: %s", filepath.Base(path), err, strings.TrimSpace(problems.String()))
+	failed := func(err error) error {
+		return fmt.Errorf("decode %s: %w: %s", filepath.Base(path), err, strings.TrimSpace(problems.String()))
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, failed(err)
+	}
+	deprioritize(cmd)
+	if err := cmd.Wait(); err != nil {
+		return nil, failed(err)
 	}
 	return out.Bytes(), nil
 }

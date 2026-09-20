@@ -3,7 +3,9 @@ package stream
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"rail-announcements-backend/internal/feed"
 	"rail-announcements-backend/internal/hls"
 	"rail-announcements-backend/internal/ketech"
+	"rail-announcements-backend/internal/queue"
 )
 
 type capture struct {
@@ -75,6 +78,20 @@ type quiet struct{ t *testing.T }
 func (q quiet) Infof(format string, args ...any) { q.t.Logf(format, args...) }
 func (q quiet) Warnf(format string, args ...any) { q.t.Logf(format, args...) }
 
+// recorder keeps what the mixer warned about, which is the only trace a late
+// or dropped block leaves.
+type recorder struct {
+	t        *testing.T
+	warnings []string
+}
+
+func (r *recorder) Infof(format string, args ...any) { r.t.Logf(format, args...) }
+
+func (r *recorder) Warnf(format string, args ...any) {
+	r.warnings = append(r.warnings, fmt.Sprintf(format, args...))
+	r.t.Logf("WARN "+format, args...)
+}
+
 func text(s string) *string { return &s }
 
 func announcement(id string, kind feed.AnnouncementType, movement, platform string) *feed.Announcement {
@@ -105,6 +122,134 @@ func start(t *testing.T, query string, samples int) (chan any, *capture, *fakeRe
 	go func() { defer close(done); s.run(ctx, messages, output) }()
 	t.Cleanup(func() { cancel(); <-done })
 	return messages, output, renderer
+}
+
+// mixerFor builds a mixer a test drives tick by tick, with the queue and the
+// block filling run gives it. speak puts an announcement of that many samples
+// on the air, as a finished render does.
+func mixerFor(t *testing.T, epoch time.Time, log Logger) (*mixer, *capture, func(samples int)) {
+	t.Helper()
+	values, err := url.ParseQuery("crs=KGX&platform=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	zone, err := ParseZone(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := func() time.Time { return epoch }
+	output := &capture{}
+	s := &Stream{Zone: zone, Key: zone.Key(), log: log, now: clock}
+	var started []*queue.Playback
+	q := queue.New(func(p *queue.Playback) { started = append(started, p) }, clock, s.lanes, func(string) {}, func(error) {})
+	m := &mixer{stream: s, queue: q, begin: func() {}, encoder: output, epoch: epoch}
+
+	speak := func(samples int) {
+		t.Helper()
+		q.Push(*announcement("speaking", feed.Next, "m1", "1"))
+		if len(started) != 1 {
+			t.Fatalf("the queue started %d announcements, want 1", len(started))
+		}
+		pcm := make(audio.PCM, samples*2)
+		for i := 0; i < len(pcm); i += 2 {
+			binary.LittleEndian.PutUint16(pcm[i:], spoken)
+		}
+		m.voices = append(m.voices, &speaking{started[0], pcm})
+		started = nil
+	}
+	return m, output, speak
+}
+
+func TestALateTickWritesEveryDueSampleAndTheSpeechThatFillsThem(t *testing.T) {
+	epoch := time.Now()
+	log := &recorder{t: t}
+	m, output, speak := mixerFor(t, epoch, log)
+	speak(5 * audio.SampleRate)
+
+	wrote, err := m.tick(epoch.Add(3 * time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := samplesFor(3 * time.Second); wrote != want {
+		t.Errorf("a tick three seconds late wrote %d samples, want %d", wrote, want)
+	}
+	if loud, silent := output.counts(); int64(loud) != samplesFor(3*time.Second) || silent != 0 {
+		t.Errorf("%d samples of speech and %d of silence: the announcement fills the whole block", loud, silent)
+	}
+
+	if _, err := m.tick(epoch.Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if loud, _ := output.counts(); int64(loud) != samplesFor(5*time.Second) {
+		t.Errorf("%d samples of speech in five seconds, want %d: the announcement kept its place", loud, samplesFor(5*time.Second))
+	}
+	if len(m.voices) != 0 {
+		t.Error("the announcement did not finish when its audio ran out")
+	}
+	if len(log.warnings) != 1 || !strings.Contains(log.warnings[0], "late") {
+		t.Errorf("warnings %q, want one saying how late the tick was", log.warnings)
+	}
+}
+
+func TestAStallPastTheCatchUpBoundDropsAudioAndSaysSo(t *testing.T) {
+	epoch := time.Now()
+	log := &recorder{t: t}
+	m, output, _ := mixerFor(t, epoch, log)
+
+	wrote, err := m.tick(epoch.Add(30 * time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := samplesFor(maxCatchUp); wrote != want {
+		t.Errorf("a tick 30 seconds late wrote %d samples, want the %s bound of %d", wrote, maxCatchUp, want)
+	}
+	if len(log.warnings) != 2 || !strings.Contains(log.warnings[1], "Dropping 20s of audio") {
+		t.Errorf("warnings %q, want how late the tick was and how much audio went", log.warnings)
+	}
+
+	// The audio dropped counts as written, so the tick after it is due only its
+	// own second, and the late warning holds off until lateInterval has passed.
+	next, err := m.tick(epoch.Add(31 * time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := samplesFor(time.Second); next != want {
+		t.Errorf("the tick after the drop wrote %d samples, want %d", next, want)
+	}
+	if len(log.warnings) != 2 {
+		t.Errorf("warnings %q: the late warning comes at most once every %s", log.warnings, lateInterval)
+	}
+	if _, silent := output.counts(); int64(silent) != samplesFor(maxCatchUp)+samplesFor(time.Second) {
+		t.Errorf("%d samples reached the encoder, want %d", silent, samplesFor(maxCatchUp)+samplesFor(time.Second))
+	}
+}
+
+func TestOnTimeTicksWriteTheElapsedSamplesWithoutDrift(t *testing.T) {
+	epoch := time.Now()
+	log := &recorder{t: t}
+	m, output, _ := mixerFor(t, epoch, log)
+
+	// A ticker fires a little after its interval every time, which is what drift
+	// would accumulate from.
+	const ticks = 400
+	const interval = mixInterval + 137*time.Microsecond
+	var total int64
+	for i := 1; i <= ticks; i++ {
+		wrote, err := m.tick(epoch.Add(time.Duration(i) * interval))
+		if err != nil {
+			t.Fatal(err)
+		}
+		total += wrote
+	}
+	if want := samplesFor(ticks * interval); total != want {
+		t.Errorf("%d samples over %s, want %d", total, time.Duration(ticks)*interval, want)
+	}
+	if _, silent := output.counts(); int64(silent) != total {
+		t.Errorf("%d samples reached the encoder, want %d", silent, total)
+	}
+	if len(log.warnings) != 0 {
+		t.Errorf("warnings %q: a tick on time is not worth reporting", log.warnings)
+	}
 }
 
 func eventually(t *testing.T, what string, condition func() bool) {
