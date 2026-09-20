@@ -14,6 +14,7 @@ import (
 	"rail-announcements-backend/internal/audio"
 	"rail-announcements-backend/internal/config"
 	"rail-announcements-backend/internal/feed"
+	"rail-announcements-backend/internal/helppoint"
 	"rail-announcements-backend/internal/logging"
 	"rail-announcements-backend/internal/stream"
 )
@@ -37,6 +38,11 @@ func main() {
 		log.FatalE("Feed", err)
 	}
 
+	board, err := helppoint.NewBoard(cfg.Feed.DarwinBrowserURL)
+	if err != nil {
+		log.FatalE("Departure boards", err)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -51,7 +57,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.API.Port),
-		Handler:           api.New(streams, library, cfg.API.AllowedOrigins, log).Handler(),
+		Handler:           api.New(streams, library, board, cfg.API.AllowedOrigins, log).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {

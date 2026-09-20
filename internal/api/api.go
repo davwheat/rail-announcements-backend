@@ -1,5 +1,5 @@
-// Package api is the service's HTTP surface: the live streams, and the
-// endpoint that renders a posted announcement.
+// Package api is the service's HTTP surface: the live streams, the endpoint
+// that renders a posted announcement, and the help point.
 package api
 
 import (
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -17,6 +18,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"rail-announcements-backend/internal/audio"
+	"rail-announcements-backend/internal/helppoint"
+	"rail-announcements-backend/internal/plan"
 	"rail-announcements-backend/internal/stream"
 	"rail-announcements-backend/internal/system"
 )
@@ -34,15 +37,21 @@ type Logger interface {
 	Warnf(format string, args ...any)
 }
 
+var (
+	crsPattern = regexp.MustCompile(`^[A-Z]{3}$`)
+	errEmpty   = errors.New("nothing to say")
+)
+
 type Server struct {
 	streams *stream.Manager
 	library *audio.Library
+	board   *helppoint.Board
 	origins origins
 	log     Logger
 }
 
-func New(streams *stream.Manager, library *audio.Library, origins []string, log Logger) *Server {
-	return &Server{streams: streams, library: library, origins: parseOrigins(origins), log: log}
+func New(streams *stream.Manager, library *audio.Library, board *helppoint.Board, origins []string, log Logger) *Server {
+	return &Server{streams: streams, library: library, board: board, origins: parseOrigins(origins), log: log}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -56,6 +65,7 @@ func (s *Server) Handler() http.Handler {
 	r.Get("/v1/streams/{key}/{segment}", s.segment)
 	r.Get("/v1/systems", s.systems)
 	r.Post("/v1/announcements", s.render)
+	r.Get("/v1/help-points/{crs}", s.helpPoint)
 	return r
 }
 
@@ -250,27 +260,74 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), renderTimeout)
 	defer cancel()
-	pcm, err := s.library.Render(ctx, sys.FilePrefix(), announcement)
+	mp3, err := s.mp3(ctx, sys.FilePrefix(), announcement)
 	switch {
+	case err == nil:
+		writeMP3(w, mp3)
 	case errors.Is(err, audio.ErrMissing):
 		writeError(w, http.StatusUnprocessableEntity, "missing_audio", err.Error())
-		return
-	case err == nil && len(pcm) == 0:
+	case errors.Is(err, errEmpty):
 		writeError(w, http.StatusUnprocessableEntity, "empty_announcement", "the state describes nothing to say")
-		return
-	case err == nil:
-		var mp3 []byte
-		if mp3, err = s.library.EncodeMP3(ctx, pcm); err == nil {
-			w.Header().Set("Content-Type", "audio/mpeg")
-			w.Header().Set("Cache-Control", "no-store")
-			w.Header().Set("Content-Length", strconv.Itoa(len(mp3)))
-			w.Write(mp3)
-			return
-		}
+	case r.Context().Err() == nil:
+		s.log.Warnf("Rendering %s %s failed: %v", sys.ID(), request.Announcement, err)
+		writeError(w, http.StatusInternalServerError, "render_failed", "the announcement could not be rendered")
 	}
-	if r.Context().Err() != nil {
+}
+
+// helpPoint answers with the station's departure board, spoken as an MP3. A
+// help point that can't read the board says so, and that is an MP3 too: what
+// plays the response has a listener and no screen.
+func (s *Server) helpPoint(w http.ResponseWriter, r *http.Request) {
+	crs := strings.ToUpper(chi.URLParam(r, "crs"))
+	if !crsPattern.MatchString(crs) {
+		writeError(w, http.StatusBadRequest, "bad_crs", "crs must be a three-letter station code")
 		return
 	}
-	s.log.Warnf("Rendering %s %s failed: %v", sys.ID(), request.Announcement, err)
-	writeError(w, http.StatusInternalServerError, "render_failed", "the announcement could not be rendered")
+	ctx, cancel := context.WithTimeout(r.Context(), renderTimeout)
+	defer cancel()
+
+	services, err := s.board.Departures(ctx, crs, time.Now())
+	if errors.Is(err, helppoint.ErrUnknownStation) {
+		writeError(w, http.StatusNotFound, "unknown_station", fmt.Sprintf("no station %q", crs))
+		return
+	}
+	announcement := helppoint.Unavailable()
+	if err != nil {
+		s.log.Warnf("Help point %s: %v", crs, err)
+	} else {
+		announcement = helppoint.Departures(crs, services, func(id string) bool {
+			return s.library.Exists(helppoint.FilePrefix, id)
+		})
+	}
+
+	mp3, renderErr := s.mp3(ctx, helppoint.FilePrefix, announcement)
+	if renderErr != nil && err == nil && ctx.Err() == nil {
+		s.log.Warnf("Rendering help point %s failed: %v", crs, renderErr)
+		mp3, renderErr = s.mp3(ctx, helppoint.FilePrefix, helppoint.Unavailable())
+	}
+	switch {
+	case renderErr == nil:
+		writeMP3(w, mp3)
+	case r.Context().Err() == nil:
+		s.log.Warnf("Rendering help point %s failed: %v", crs, renderErr)
+		writeError(w, http.StatusInternalServerError, "render_failed", "the announcement could not be rendered")
+	}
+}
+
+func (s *Server) mp3(ctx context.Context, prefix string, p plan.Plan) ([]byte, error) {
+	pcm, err := s.library.Render(ctx, prefix, p)
+	if err != nil {
+		return nil, err
+	}
+	if len(pcm) == 0 {
+		return nil, errEmpty
+	}
+	return s.library.EncodeMP3(ctx, pcm)
+}
+
+func writeMP3(w http.ResponseWriter, mp3 []byte) {
+	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Length", strconv.Itoa(len(mp3)))
+	w.Write(mp3)
 }

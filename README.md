@@ -5,7 +5,8 @@ the announcement stream of Darwin Browser (darwinbrowser.com), builds each
 announcement from the recordings that
 [railannouncements.co.uk](https://github.com/davwheat/rail-announcements) uses, and serves the result as
 an HTTP Live Stream (HLS). It also renders a single announcement from a posted
-website state, for every announcement system the website registers.
+website state, for every announcement system the website registers, and it
+speaks a station's departure board the way a platform help point does.
 
 The announcement logic is a port of the website's TypeScript. The website stays
 the reference, and the tests here fail on any clip that differs from it. See
@@ -127,6 +128,33 @@ label. The response is the MP3 (`audio/mpeg`), or a JSON error:
 | 422 | `invalid_state` | The state can't be read, or describes an announcement that can't be made. |
 | 422 | `missing_audio` | A recording doesn't exist, and the state's `missingAudioMode` doesn't allow for that. |
 | 422 | `empty_announcement` | The state describes nothing to say. |
+| 500 | `render_failed` | The audio couldn't be produced. |
+
+## Hear a station's departure board
+
+```
+GET /v1/help-points/KGX
+```
+
+The response is an MP3 (`audio/mpeg`) of the station's departure board in Phil
+Sayer's voice, the way the button on a platform help point speaks it. The CRS
+code in the path is the only parameter.
+
+The board is the passenger trains that call at the station in the next 90
+minutes, to a limit of eight, from Darwin Browser's `/v1/departures`. For each
+one, the announcement gives the platform, the time, the operator, the
+destinations and via points, and the number of coaches. It also says when a
+train is delayed or cancelled, with the reason when Darwin gives one, and it
+announces a train that terminates at the station as an arrival.
+
+If the board can't be read, the response is still `200` and an MP3. It says
+that the information facility isn't in operation, because a player has no way
+to show a JSON error to a listener. Only these requests get a JSON error:
+
+| Status | Code | Meaning |
+|---|---|---|
+| 400 | `bad_crs` | The path isn't a three-letter station code. |
+| 404 | `unknown_station` | Darwin Browser has no station with that code. |
 | 500 | `render_failed` | The audio couldn't be produced. |
 
 `GET /healthz` reports the number of running streams.

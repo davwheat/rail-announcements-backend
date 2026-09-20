@@ -5,8 +5,9 @@ announcement stream, builds announcements from the website's recordings, and
 serves them as one mixed stream for each listener, as HLS
 (`GET /v1/streams/live.m3u8`) or as an endless MP3 response (`live.mp3`). It
 also renders one MP3 for a posted tab state (`POST /v1/announcements`), for
-every system the website registers. Read `README.md` for the API and
-`docs/architecture.md` for the design and the decisions.
+every system the website registers, and speaks a station's departure board the
+way a help point does (`GET /v1/help-points/CRS`). Read `README.md` for the API
+and `docs/architecture.md` for the design and the decisions.
 
 ## Rules that aren't obvious
 
@@ -25,6 +26,10 @@ every system the website registers. Read `README.md` for the API and
   hasn't refused the state — the website shows that alert itself and asks this
   service only for the audio — so the port has to build the plan. Only a case
   that played nothing expects a refusal.
+- **`internal/helppoint` isn't a port.** The website has no help point, so the
+  wording is decided here and that package can change first. It answers a
+  failure to read the board with a spoken apology and status `200`, on purpose:
+  an `<audio>` element plays nothing for an error status.
 - **To add or change a system**, work in the website first: register it in
   `src/announcement-data/AllSystems.ts` (and name its module in
   `tests/backend-parity/generate.ts` if it keeps constants beside its class),
