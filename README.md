@@ -133,12 +133,14 @@ label. The response is the MP3 (`audio/mpeg`), or a JSON error:
 ## Hear a station's departure board
 
 ```
-GET /v1/help-points/KGX
+GET /v1/help-points/KGX?voice=celia
 ```
 
-The response is an MP3 (`audio/mpeg`) of the station's departure board in Phil
-Sayer's voice, the way the button on a platform help point speaks it. The CRS
-code in the path is the only parameter.
+The response is an MP3 (`audio/mpeg`) of the station's departure board, the way
+the button on a platform help point speaks it. The CRS code in the path names
+the station. `voice` is optional: `phil` for Phil Sayer, which is the default,
+or `celia` for Celia Drummond. The website's **Help point** tab, on both
+voices' pages, plays this response.
 
 The board is the passenger trains that call at the station in the next 90
 minutes, to a limit of eight, from Darwin Browser's `/v1/departures`. For each
@@ -154,6 +156,7 @@ to show a JSON error to a listener. Only these requests get a JSON error:
 | Status | Code | Meaning |
 |---|---|---|
 | 400 | `bad_crs` | The path isn't a three-letter station code. |
+| 400 | `bad_voice` | `voice` names neither `phil` nor `celia`. |
 | 404 | `unknown_station` | Darwin Browser has no station with that code. |
 | 500 | `render_failed` | The audio couldn't be produced. |
 

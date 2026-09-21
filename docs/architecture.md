@@ -41,7 +41,7 @@ website.
 | `systems/*` | One package for each system the website registers: a tab's option state in, a plan out. |
 | `systems/shared` | What every port needs and none writes twice: button tabs as data, and the national station name table. |
 | `systems/paritytest` | Replays a system's exported record against its port. |
-| `helppoint` | The spoken departure board: Darwin Browser's board in, a plan in Phil's voice out. |
+| `helppoint` | The spoken departure board: Darwin Browser's board in, a plan in Phil's or Celia's voice out. |
 | `api` | HTTP. |
 
 ## Decisions
@@ -282,14 +282,16 @@ that wants one fixed voice and no player logic.
 `GET /v1/help-points/CRS` speaks a station's departure board, the way the
 button on a platform help point does. `helppoint.Board` reads the next 90
 minutes of passenger trains, to a limit of eight, from Darwin Browser's
-`/v1/departures`, and `helppoint.Departures` turns them into a plan in Phil's
-voice. The renderer and the MP3 encoder are the ones a posted state uses.
+`/v1/departures`, and `helppoint.Departures` turns them into a plan in the
+voice that `?voice=` names: `phil`, which is the default, or `celia`. The
+renderer and the MP3 encoder are the ones a posted state uses.
 
-The package isn't a port. The website has no help point, so there is no record
-to compare with, and the wording is decided here. It borrows two things from
-`ketech`: Phil's file prefix, and the website's table of delay codes.
+The package isn't a port. The website's **Help point** tab plays this endpoint
+and builds nothing itself, so there is no record to compare with, and the
+wording is decided here. It borrows two things from `ketech`: the voice's file
+prefix, and its copy of the website's table of delay codes.
 
-Three decisions shape it:
+Four decisions shape it:
 
 -   **A missing recording is left out.** The plan's missing audio mode is
     `play-silence`. A board names stations that Phil never recorded, and a
@@ -300,6 +302,13 @@ Three decisions shape it:
     platform 4 will be the" and "Southern service to" as single clips for most
     platforms and operators. The package asks `audio.Library.Exists` for the
     combined clip, and joins the parts when there is none.
+-   **The wording is Phil's, and Celia says it with the clips she has.** She
+    never recorded "service" or "this service" in the inflections the board
+    uses, nor "hour" and "hours" at the end of a sentence.
+    `announcement.recorded` takes the clip in another inflection, or "this
+    train" for "this service", when the voice lacks the first choice. A test
+    plans a board that takes every turn of the wording, in both voices, and
+    fails on a clip that has no recording.
 -   **A failure is spoken.** When the board can't be read, the response is
     still `200` and an MP3: "We regret that the information facility is not in
     operation." What plays the response has a listener and no screen, and a

@@ -12725,6 +12725,7 @@
   "thisStationAudio": "e.this station"
  },
  "DEFAULT_CHIME": "three",
+ "HELP_POINT_VOICE": "celia",
  "PLATFORMS": [
   "0",
   "1",

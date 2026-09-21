@@ -12,9 +12,6 @@ import (
 	"rail-announcements-backend/internal/plan"
 )
 
-// FilePrefix is the directory of the voice that every help point clip is in.
-var FilePrefix = ketech.Phil.FilePrefix
-
 const (
 	beforeServiceDelay   = 2000
 	beforeSentenceDelay  = 1000
@@ -50,8 +47,21 @@ var lnwrDestinations = []string{"EUS", "CRE", "BDM", "SAA", "MKC", "TRI", "LIV",
 // announcement collects clips. A clip with no recording is left out when the
 // plan is rendered, so only a choice between recordings has to ask exists.
 type announcement struct {
+	voice  *ketech.Voice
 	clips  []plan.Clip
 	exists func(id string) bool
+}
+
+// recorded returns the first of ids that the voice has, or the first of all
+// when it has none. The wording is Phil's, and Celia lacks a few of his clips
+// but has the same words in another inflection.
+func (a *announcement) recorded(ids ...string) string {
+	for _, id := range ids {
+		if a.exists(id) {
+			return id
+		}
+	}
+	return ids[0]
 }
 
 func (a *announcement) say(ids ...string) {
@@ -76,10 +86,10 @@ func Unavailable() plan.Plan {
 	return a.plan()
 }
 
-// Departures speaks a station's board. exists reports whether Phil has a
-// recording of a clip.
-func Departures(crs string, services []Service, exists func(id string) bool) plan.Plan {
-	a := announcement{exists: exists}
+// Departures speaks a station's board in a voice. exists reports whether the
+// voice has a recording of a clip.
+func Departures(voice *ketech.Voice, crs string, services []Service, exists func(id string) bool) plan.Plan {
+	a := announcement{voice: voice, exists: exists}
 	a.say("s.this is", "station.e."+crs)
 	if len(services) == 0 {
 		a.sayAfter(beforeSentenceDelay, "w.there are no more services from this station today")
@@ -110,7 +120,7 @@ func (a *announcement) departing(service Service, nth int) {
 	switch {
 	case nth > 1:
 		a.sayAfter(beforeServiceDelay, "s.the")
-		a.say("m.ordinal "+strconv.Itoa(nth), "m.service-2")
+		a.say("m.ordinal "+strconv.Itoa(nth), a.recorded("m.service-2", "e.service-2"))
 		if service.Platform != "" {
 			a.say("m.from", "m.platform", number(service.Platform))
 		}
@@ -184,7 +194,7 @@ func (a *announcement) delay(service Service) {
 	reason := a.reason(service.LateReasonCode)
 	switch {
 	case late >= time.Minute:
-		a.sayAfter(beforeFollowUpDelay, "s.this service-2")
+		a.sayAfter(beforeFollowUpDelay, a.recorded("s.this service-2", "s.this train"))
 		a.say("m.is delayed by approximately")
 		a.duration(late)
 		if len(reason) > 0 {
@@ -192,7 +202,7 @@ func (a *announcement) delay(service Service) {
 			a.say(reason...)
 		}
 	case expected.Delayed:
-		a.sayAfter(beforeFollowUpDelay, "s.this service-2")
+		a.sayAfter(beforeFollowUpDelay, a.recorded("s.this service-2", "s.this train"))
 		if len(reason) > 0 {
 			a.say("m.is being delayed due to")
 			a.say(reason...)
@@ -236,7 +246,7 @@ func (a *announcement) duration(length time.Duration) {
 		if minutes > 0 {
 			a.say("m."+word, "m.and")
 		} else {
-			a.say("e." + word)
+			a.say(a.recorded("e."+word, "m."+word))
 		}
 	}
 	if minutes > 0 {
@@ -251,7 +261,7 @@ func (a *announcement) duration(length time.Duration) {
 // reason returns the clips for a Darwin reason code. It returns none unless
 // every clip is recorded, so that "due to" is never left without a reason.
 func (a *announcement) reason(code string) []string {
-	clips := []string(ketech.Phil.DelayCodes[strings.TrimSpace(code)])
+	clips := []string(a.voice.DelayCodes[strings.TrimSpace(code)])
 	if slices.ContainsFunc(clips, func(id string) bool { return !a.exists(id) }) {
 		return nil
 	}

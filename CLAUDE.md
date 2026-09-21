@@ -32,8 +32,9 @@ and `docs/architecture.md` for the design and the decisions.
   or the option in the website, or stop offering it, and export again. Only
   station names in the live record are exempt, because the feed names stations
   that nobody recorded.
-- **`internal/helppoint` isn't a port.** The website has no help point, so the
-  wording is decided here and that package can change first. It answers a
+- **`internal/helppoint` isn't a port.** The website's Help point tab plays the
+  endpoint and builds nothing itself, so the wording is decided here and that
+  package can change first. It speaks in either voice (`?voice=phil|celia`). It answers a
   failure to read the board with a spoken apology and status `200`, on purpose:
   an `<audio>` element plays nothing for an error status.
 - **To add or change a system**, work in the website first: register it in
