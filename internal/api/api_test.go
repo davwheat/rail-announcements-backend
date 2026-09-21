@@ -454,27 +454,30 @@ func TestAHelpPointSpeaksTheDepartureBoard(t *testing.T) {
 	server := httptest.NewServer(New(nil, lib, board, []string{"*"}, testLog{t}).Handler())
 	defer server.Close()
 
-	seconds := func(crs string) float64 {
+	seconds := func(path string) float64 {
 		t.Helper()
-		response, err := http.Get(server.URL + "/v1/help-points/" + crs)
+		response, err := http.Get(server.URL + "/v1/help-points/" + path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer response.Body.Close()
 		body, _ := io.ReadAll(response.Body)
 		if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "audio/mpeg" {
-			t.Fatalf("%s: status %d, %s: %s", crs, response.StatusCode, response.Header.Get("Content-Type"), body)
+			t.Fatalf("%s: status %d, %s: %s", path, response.StatusCode, response.Header.Get("Content-Type"), body)
 		}
 		decode := exec.Command("ffmpeg", "-v", "error", "-i", "-", "-f", "s16le", "-ac", "1", "-ar", "44100", "-")
 		decode.Stdin = bytes.NewReader(body)
 		pcm, err := decode.Output()
 		if err != nil {
-			t.Fatalf("%s: the response isn't an MP3: %v", crs, err)
+			t.Fatalf("%s: the response isn't an MP3: %v", path, err)
 		}
 		return float64(len(pcm)) / 2 / 44100
 	}
 
 	spoken, unavailable := seconds("kgx"), seconds("CBG")
+	if celia := seconds("KGX?voice=celia"); celia < 20 {
+		t.Errorf("Celia's board lasts %.1f seconds, which is too short to hold a delayed service", celia)
+	}
 	if spoken < 20 {
 		t.Errorf("the board lasts %.1f seconds, which is too short to hold a delayed service", spoken)
 	}
@@ -487,9 +490,10 @@ func TestAHelpPointSpeaksTheDepartureBoard(t *testing.T) {
 		status int
 		code   string
 	}{
-		"/v1/help-points/ZZZ":  {http.StatusNotFound, "unknown_station"},
-		"/v1/help-points/KGXX": {http.StatusBadRequest, "bad_crs"},
-		"/v1/help-points/K.X":  {http.StatusBadRequest, "bad_crs"},
+		"/v1/help-points/ZZZ":              {http.StatusNotFound, "unknown_station"},
+		"/v1/help-points/KGXX":             {http.StatusBadRequest, "bad_crs"},
+		"/v1/help-points/K.X":              {http.StatusBadRequest, "bad_crs"},
+		"/v1/help-points/KGX?voice=nobody": {http.StatusBadRequest, "bad_voice"},
 	} {
 		response, err := http.Get(server.URL + path)
 		if err != nil {

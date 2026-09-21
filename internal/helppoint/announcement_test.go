@@ -6,8 +6,14 @@ import (
 	"testing"
 	"time"
 
+	"rail-announcements-backend/internal/audio"
+	"rail-announcements-backend/internal/ketech"
 	"rail-announcements-backend/internal/plan"
+	"rail-announcements-backend/internal/systems/paritytest"
 )
+
+// audioDirectory is the website's audio, seen from this package.
+const audioDirectory = "../../rail-announcements/audio"
 
 func at(clock string) *time.Time {
 	t, err := time.ParseInLocation("2006-01-02 15:04", "2026-07-14 "+clock, london)
@@ -167,7 +173,7 @@ func TestTheBoardIsSpoken(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			p := Departures("BTN", c.services, recorded)
+			p := Departures(ketech.Phil, "BTN", c.services, recorded)
 			want := opening + c.want + closing
 			if c.want == "" {
 				want = strings.TrimSuffix(opening, " | ") + closing
@@ -184,7 +190,7 @@ func TestTheBoardIsSpoken(t *testing.T) {
 
 func TestAReasonWithAMissingRecordingIsLeftOut(t *testing.T) {
 	services := []Service{{TOC: "SN", PlannedDep: at("09:05"), Cancelled: true, CancelReasonCode: "100", Destinations: to("VIC")}}
-	p := Departures("BTN", services, func(id string) bool { return !strings.HasPrefix(id, "disruption-reason.") })
+	p := Departures(ketech.Phil, "BTN", services, func(id string) bool { return !strings.HasPrefix(id, "disruption-reason.") })
 	if slices.ContainsFunc(p.Clips, func(clip plan.Clip) bool { return clip.ID == "m.due to" }) {
 		t.Errorf("%q says \"due to\" with no reason after it", spoken(p))
 	}
@@ -192,9 +198,61 @@ func TestAReasonWithAMissingRecordingIsLeftOut(t *testing.T) {
 
 func TestTimesAreSpokenInLondonTime(t *testing.T) {
 	utc := at("09:05").UTC()
-	p := Departures("BTN", []Service{{TOC: "SN", PlannedDep: &utc, ExpDep: &BoardTime{T: "09:20"}, Destinations: to("VIC")}}, recorded)
+	p := Departures(ketech.Phil, "BTN", []Service{{TOC: "SN", PlannedDep: &utc, ExpDep: &BoardTime{T: "09:20"}, Destinations: to("VIC")}}, recorded)
 	got := spoken(p)
 	if !strings.Contains(got, "hour.s.09 | mins.m.05") || !strings.Contains(got, "platform.s.15 | e.minutes") {
 		t.Errorf("a British Summer Time departure given in UTC was spoken as %q", got)
 	}
+}
+
+// everyBranch is a board that takes each turn of the wording: a combined and
+// a spelt-out platform, no platform, a second service, an arrival, a
+// cancellation with a reason, and delays of a whole hour, of hours and minutes
+// and of unknown length.
+func everyBranch() []Service {
+	nine := 9
+	return []Service{
+		{TOC: "SN", Platform: "4", PlannedDep: at("09:05"), ExpDep: &BoardTime{T: "10:05"}, CoachCount: &nine, Destinations: to("VIC")},
+		{TOC: "SN", Platform: "4", PlannedDep: at("09:10"), ExpDep: &BoardTime{T: "11:15"}, LateReasonCode: "100", Destinations: to("VIC")},
+		{TOC: "SN", Platform: "21", PlannedDep: at("09:12"), ExpDep: &BoardTime{T: "11:12"}, Destinations: to("VIC")},
+		{TOC: "SN", PlannedDep: at("09:15"), ExpDep: &BoardTime{Delayed: true}, Destinations: to("VIC")},
+		{TOC: "SN", Platform: "2", PlannedArr: at("09:20"), Origins: to("VIC")},
+		{TOC: "SN", PlannedDep: at("09:25"), Cancelled: true, CancelReasonCode: "100", Destinations: to("VIC")},
+	}
+}
+
+func TestCeliaSaysTheWordsSheHasInAnotherInflection(t *testing.T) {
+	celia := func(id string) bool {
+		return !slices.Contains([]string{"m.service-2", "s.this service-2", "e.hour", "e.hours"}, id)
+	}
+	got := spoken(Departures(ketech.Celia, "BTN", everyBranch(), celia))
+	for _, want := range []string{
+		"m.ordinal 2 | e.service-2 | m.from",
+		"(500ms) s.this train | m.is delayed by approximately | platform.s.1 | m.hour",
+		"platform.s.2 | m.hours | m.and",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Celia's board doesn't say %q:\n%s", want, got)
+		}
+	}
+	for _, missing := range []string{"m.service-2", "s.this service-2", "e.hour"} {
+		if strings.Contains(got, " "+missing+" ") {
+			t.Errorf("Celia's board plans %q, which she never recorded:\n%s", missing, got)
+		}
+	}
+}
+
+func TestEveryClipOfTheBoardHasARecordingInBothVoices(t *testing.T) {
+	library, err := audio.NewLibrary(audioDirectory, "", 0)
+	if err != nil {
+		t.Skip(err)
+	}
+	recordings := paritytest.OpenRecordings(t, audioDirectory)
+	for id, voice := range ketech.Voices {
+		exists := func(clip string) bool { return library.Exists(voice.FilePrefix, clip) }
+		recordings.Check(t, voice.FilePrefix, id+" board", Departures(voice, "BTN", everyBranch(), exists).Clips)
+		recordings.Check(t, voice.FilePrefix, id+" empty board", Departures(voice, "BTN", nil, exists).Clips)
+		recordings.Check(t, voice.FilePrefix, id+" apology", Unavailable().Clips)
+	}
+	recordings.Report(t)
 }

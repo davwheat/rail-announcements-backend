@@ -19,6 +19,7 @@ import (
 
 	"rail-announcements-backend/internal/audio"
 	"rail-announcements-backend/internal/helppoint"
+	"rail-announcements-backend/internal/ketech"
 	"rail-announcements-backend/internal/plan"
 	"rail-announcements-backend/internal/stream"
 	"rail-announcements-backend/internal/system"
@@ -283,6 +284,13 @@ func (s *Server) helpPoint(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_crs", "crs must be a three-letter station code")
 		return
 	}
+	voice := ketech.Phil
+	if id := r.URL.Query().Get("voice"); id != "" {
+		if voice = ketech.Voices[id]; voice == nil {
+			writeError(w, http.StatusBadRequest, "bad_voice", fmt.Sprintf("no voice %q", id))
+			return
+		}
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), renderTimeout)
 	defer cancel()
 
@@ -295,15 +303,15 @@ func (s *Server) helpPoint(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.log.Warnf("Help point %s: %v", crs, err)
 	} else {
-		announcement = helppoint.Departures(crs, services, func(id string) bool {
-			return s.library.Exists(helppoint.FilePrefix, id)
+		announcement = helppoint.Departures(voice, crs, services, func(id string) bool {
+			return s.library.Exists(voice.FilePrefix, id)
 		})
 	}
 
-	mp3, renderErr := s.mp3(ctx, helppoint.FilePrefix, announcement)
+	mp3, renderErr := s.mp3(ctx, voice.FilePrefix, announcement)
 	if renderErr != nil && err == nil && ctx.Err() == nil {
 		s.log.Warnf("Rendering help point %s failed: %v", crs, renderErr)
-		mp3, renderErr = s.mp3(ctx, helppoint.FilePrefix, helppoint.Unavailable())
+		mp3, renderErr = s.mp3(ctx, voice.FilePrefix, helppoint.Unavailable())
 	}
 	switch {
 	case renderErr == nil:
