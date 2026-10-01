@@ -104,12 +104,14 @@ func runningPortions(m feed.Movement, endpoints []feed.Endpoint) []feed.Endpoint
 	return out
 }
 
-// announcedDestination is the station the train is announced to. A false
-// destination replaces the station but not the via points of the real one.
+// announcedDestination is the station the train is announced to. The feed's
+// via points lie on the route to the real destination, so a false destination
+// has none.
 func announcedDestination(m feed.Movement) feed.Endpoint {
 	own := ownDestination(m)
 	if m.FalseDestination != nil {
 		own.Location = *m.FalseDestination
+		own.Via = nil
 	}
 	return own
 }
@@ -199,10 +201,16 @@ func CallingPoints(m feed.Movement) ([]CallingPoint, error) {
 	terminus := func(call feed.Call) bool {
 		return call.TPL == destination.TPL || (deref(destination.CRS) != "" && deref(call.CRS) == deref(destination.CRS))
 	}
+	// A train on a circular route calls at a false destination again on its way
+	// to the real one, so the calling points end at the first call there. The
+	// real destination is the last call at it.
 	destinationIndex := -1
 	for i, call := range m.CallingPoints {
 		if terminus(call) {
 			destinationIndex = i
+			if m.FalseDestination != nil {
+				break
+			}
 		}
 	}
 
