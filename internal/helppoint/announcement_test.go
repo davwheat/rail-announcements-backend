@@ -95,6 +95,17 @@ func TestTheBoardIsSpoken(t *testing.T) {
 				" | toc.m.southern service to | station.m.LIT | m.and | station.m.SOU | m.via | station.m.WRH | m.and | station.e.HAV",
 		},
 		{
+			"a false destination replaces the service's own, without its via, and keeps a portion's",
+			[]Service{
+				{TOC: "SN", PlannedDep: at("09:05"), FalseDestination: &to("ECR")[0], Destinations: []Endpoint{
+					{CRS: to("VIC")[0].CRS, Via: &Via{Locs: []string{"CLJ"}}}, {CRS: to("LIT")[0].CRS, AssocRID: "portion"},
+				}},
+				{TOC: "SN", PlannedDep: at("09:15"), FalseDestination: &Endpoint{}, Destinations: to("VIC")},
+			},
+			"(2s) s.the next train is the | hour.s.09 | mins.m.05 | toc.m.southern service to | station.m.ECR | m.and | station.e.LIT" +
+				" | (2s) s.the | m.ordinal 2 | m.service-2 | m.will be the | hour.s.09 | mins.m.15 | toc.m.southern service to | station.e.VIC",
+		},
+		{
 			"London Northwestern Railway is told from West Midlands Railway by destination",
 			[]Service{
 				{TOC: "LM", PlannedDep: at("09:05"), Destinations: to("EUS")},

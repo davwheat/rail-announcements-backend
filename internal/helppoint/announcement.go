@@ -332,14 +332,33 @@ func (a *announcement) origins(service Service) {
 	}
 }
 
+// announcedDestinations names a false destination in place of the service's
+// own. The board's via points lie on the route to the real destination, so the
+// false one has none. The destinations of portions are kept. A false
+// destination with no CRS code can't be spoken, so the real one stands.
+func announcedDestinations(service Service) []Endpoint {
+	falseDestination := service.FalseDestination
+	if falseDestination == nil || falseDestination.CRS == nil || *falseDestination.CRS == "" {
+		return service.Destinations
+	}
+	out := []Endpoint{{CRS: falseDestination.CRS}}
+	for _, destination := range service.Destinations {
+		if destination.AssocRID != "" {
+			out = append(out, destination)
+		}
+	}
+	return out
+}
+
 // destinations says where a service goes, and by way of where. finalInflection
 // is the inflection of the last station: "e" when it ends the sentence.
 func (a *announcement) destinations(service Service, finalInflection string) {
-	for i, destination := range service.Destinations {
+	destinations := announcedDestinations(service)
+	for i, destination := range destinations {
 		if destination.CRS == nil || *destination.CRS == "" {
 			continue
 		}
-		last := i == len(service.Destinations)-1
+		last := i == len(destinations)-1
 		if last && i > 0 {
 			a.say("m.and")
 		}

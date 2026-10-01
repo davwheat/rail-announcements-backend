@@ -45,6 +45,9 @@ type Via struct {
 type Endpoint struct {
 	CRS *string `json:"crs"`
 	Via *Via    `json:"via"`
+	// AssocRID names the portion that joins or divides to reach this endpoint.
+	// It's empty on the service's own.
+	AssocRID string `json:"assoc_rid"`
 }
 
 // Service is one row of the departure board.
@@ -61,6 +64,9 @@ type Service struct {
 	LateReasonCode   string     `json:"late_reason_code"`
 	Origins          []Endpoint `json:"origins"`
 	Destinations     []Endpoint `json:"destinations"`
+	// FalseDestination is the station Darwin asks this station to name in place
+	// of the service's own destination, as on a circular route.
+	FalseDestination *Endpoint `json:"false_destination"`
 }
 
 // Board reads departure boards from a Darwin Browser instance.

@@ -145,7 +145,9 @@ voices' pages, plays this response.
 The board is the passenger trains that call at the station in the next 90
 minutes, to a limit of eight, from Darwin Browser's `/v1/departures`. For each
 one, the announcement gives the platform, the time, the operator, the
-destinations and via points, and the number of coaches. It also says when a
+destinations and via points, and the number of coaches. A train that Darwin
+gives a false destination is announced to that station, with no via points,
+because the board's lie on the route to the real destination. It also says when a
 train is delayed or cancelled, with the reason when Darwin gives one, and it
 announces a train that terminates at the station as an arrival.
 
