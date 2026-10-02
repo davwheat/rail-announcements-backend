@@ -20,7 +20,9 @@ func TestTheBoardIsReadFromDarwinBrowser(t *testing.T) {
 				"toc": "SN", "planned_arr": "2026-09-20T23:37:00+01:00", "exp_arr": {"t": "23:56:00"},
 				"platform": "5", "cancelled": false, "coach_count": 8, "late_reason_code": "100",
 				"origins": [{"tpl": "VICTRIC", "crs": "VIC"}],
-				"destinations": [{"crs": "BTN", "via": {"text": "via Hove", "locs": ["HOV"]}}]}]}`)
+				"false_destination": {"tpl": "WRTHING", "crs": "WRH"},
+				"destinations": [{"crs": "BTN", "via": {"text": "via Hove", "locs": ["HOV"]}},
+					{"crs": "LIT", "assoc_rid": "202609207654321", "assoc_cat": "VV"}]}]}`)
 		case "ZZZ":
 			http.Error(w, "no such station", http.StatusNotFound)
 		default:
@@ -54,7 +56,9 @@ func TestTheBoardIsReadFromDarwinBrowser(t *testing.T) {
 	service := services[0]
 	if service.TOC != "SN" || service.Platform != "5" || service.PlannedDep != nil || service.PlannedArr.Minute() != 37 ||
 		service.ExpArr.T != "23:56:00" || *service.CoachCount != 8 || service.LateReasonCode != "100" ||
-		*service.Origins[0].CRS != "VIC" || service.Destinations[0].Via.Locs[0] != "HOV" {
+		*service.Origins[0].CRS != "VIC" || service.Destinations[0].Via.Locs[0] != "HOV" ||
+		service.Destinations[0].AssocRID != "" || service.Destinations[1].AssocRID != "202609207654321" ||
+		*service.FalseDestination.CRS != "WRH" {
 		t.Errorf("read %+v", service)
 	}
 

@@ -103,6 +103,8 @@ func Departures(voice *ketech.Voice, crs string, services []Service, exists func
 		case service.PlannedDep != nil:
 			perPlatform[service.Platform]++
 			a.departing(service, perPlatform[service.Platform])
+		case joinsHere(service):
+			// The train it joins has a row of its own, as a departure.
 		case service.PlannedArr != nil:
 			a.terminating(service)
 		}
@@ -316,11 +318,9 @@ func (a *announcement) operator(service Service, suffix string) {
 }
 
 func (a *announcement) origins(service Service) {
-	for i, origin := range service.Origins {
-		if origin.CRS == nil || *origin.CRS == "" {
-			continue
-		}
-		last := i == len(service.Origins)-1
+	origins := speakable(service.Origins)
+	for i, origin := range origins {
+		last := i == len(origins)-1
 		if last && i > 0 {
 			a.say("m.and")
 		}
@@ -332,14 +332,70 @@ func (a *announcement) origins(service Service) {
 	}
 }
 
+// joinsHere reports a service that ends here only because it joins another
+// train. Its passengers stay on board, so it doesn't terminate, and the train
+// it joins is on the board as well.
+func joinsHere(service Service) bool {
+	return service.PlannedDep == nil && throughDestination(service) != nil
+}
+
+// throughDestination is where the train that a service joins goes on to. The
+// service's own destination is only the station where it joins.
+func throughDestination(service Service) *Endpoint {
+	for i, destination := range service.Destinations {
+		if destination.AssocCat == "JJ" && destination.CRS != nil && *destination.CRS != "" {
+			return &service.Destinations[i]
+		}
+	}
+	return nil
+}
+
+// speakable leaves out an endpoint with no CRS code, which has no recording.
+// The board describes a portion that it knows nothing about that way.
+func speakable(endpoints []Endpoint) []Endpoint {
+	var out []Endpoint
+	for _, endpoint := range endpoints {
+		if endpoint.CRS != nil && *endpoint.CRS != "" {
+			out = append(out, endpoint)
+		}
+	}
+	return out
+}
+
+// announcedDestinations names a false destination in place of the service's
+// own. The board's via points lie on the route to the real destination, so the
+// false one has none. The destinations of portions are kept. A false
+// destination with no CRS code can't be spoken, so the real one stands.
+//
+// A portion that joins another train is announced to where that train goes,
+// with the via points of the whole journey.
+func announcedDestinations(service Service) []Endpoint {
+	var named *Endpoint
+	if falseDestination := service.FalseDestination; falseDestination != nil && falseDestination.CRS != nil && *falseDestination.CRS != "" {
+		named = &Endpoint{CRS: falseDestination.CRS}
+	} else if through := throughDestination(service); through != nil {
+		named = &Endpoint{CRS: through.CRS, Via: through.Via}
+	}
+	var out []Endpoint
+	if named != nil {
+		out = append(out, *named)
+	}
+	for _, destination := range service.Destinations {
+		switch {
+		case destination.AssocCat == "JJ":
+		case destination.AssocRID != "" || named == nil:
+			out = append(out, destination)
+		}
+	}
+	return speakable(out)
+}
+
 // destinations says where a service goes, and by way of where. finalInflection
 // is the inflection of the last station: "e" when it ends the sentence.
 func (a *announcement) destinations(service Service, finalInflection string) {
-	for i, destination := range service.Destinations {
-		if destination.CRS == nil || *destination.CRS == "" {
-			continue
-		}
-		last := i == len(service.Destinations)-1
+	destinations := announcedDestinations(service)
+	for i, destination := range destinations {
+		last := i == len(destinations)-1
 		if last && i > 0 {
 			a.say("m.and")
 		}

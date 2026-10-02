@@ -180,8 +180,15 @@ TypeScript and records what it does:
 - **Live announcements.** 205 real movements captured from production, each
   turned into every kind of announcement, plus variations that real traffic
   rarely shows: odd platforms, delays, cancellations with every delay code,
-  false destinations, request stops, cancelled calls, reversals and bus
-  continuations. Both voices, three sets of preferences, about 2,700 cases.
+  false destinations, request stops, cancelled calls, reversals and linked
+  services: a train that a bus finishes for, with a train taking over again, a
+  train linked to a train, and a train cut short at the link. Joins and
+  divisions are generated too: a portion that joins another train, and a train
+  that divides at each end and length the feed can give a portion, where it
+  sets nobody down, more than once, after a reversal, and where it ends. So
+  are a train that leaves coaches behind and a call where passengers can board
+  as well as alight. Both voices, three sets of preferences, about 4,100
+  cases.
   The test compares every clip, pause and error message.
 - **The KeTech voices' posted states.** Each tab's default state and presets,
   plus generated states for every way a train can divide, be short of a

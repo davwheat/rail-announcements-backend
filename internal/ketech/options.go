@@ -16,9 +16,19 @@ type CallingPoint struct {
 	SplitType     string  `json:"splitType,omitempty"`
 	SplitForm     *string `json:"splitForm,omitempty"`
 	// SplitCallingPoints are the stops of the portion that divides off here.
-	SplitCallingPoints        []CallingPoint `json:"splitCallingPoints,omitempty"`
+	SplitCallingPoints []CallingPoint `json:"splitCallingPoints,omitempty"`
+	// FurtherSplits are more portions that divide off, beyond the one that
+	// SplitForm and SplitCallingPoints describe. Only the live feed sets it:
+	// the website's editor offers one portion for each stop.
+	FurtherSplits             []FurtherSplit `json:"furtherSplits,omitempty"`
 	ContinuesAsRrbAfterHere   bool           `json:"continuesAsRrbAfterHere,omitempty"`
 	ContinuesAsTrainAfterHere bool           `json:"continuesAsTrainAfterHere,omitempty"`
+}
+
+// FurtherSplit is one more portion that divides off a train.
+type FurtherSplit struct {
+	SplitForm          string         `json:"splitForm"`
+	SplitCallingPoints []CallingPoint `json:"splitCallingPoints"`
 }
 
 func (p CallingPoint) splits() bool { return p.SplitType != "" && p.SplitType != "none" }

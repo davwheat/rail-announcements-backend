@@ -95,6 +95,41 @@ func TestTheBoardIsSpoken(t *testing.T) {
 				" | toc.m.southern service to | station.m.LIT | m.and | station.m.SOU | m.via | station.m.WRH | m.and | station.e.HAV",
 		},
 		{
+			"a false destination replaces the service's own, without its via, and keeps a portion's",
+			[]Service{
+				{TOC: "SN", PlannedDep: at("09:05"), FalseDestination: &to("ECR")[0], Destinations: []Endpoint{
+					{CRS: to("VIC")[0].CRS, Via: &Via{Locs: []string{"CLJ"}}}, {CRS: to("LIT")[0].CRS, AssocRID: "portion"},
+				}},
+				{TOC: "SN", PlannedDep: at("09:15"), FalseDestination: &Endpoint{}, Destinations: to("VIC")},
+			},
+			"(2s) s.the next train is the | hour.s.09 | mins.m.05 | toc.m.southern service to | station.m.ECR | m.and | station.e.LIT" +
+				" | (2s) s.the | m.ordinal 2 | m.service-2 | m.will be the | hour.s.09 | mins.m.15 | toc.m.southern service to | station.e.VIC",
+		},
+		{
+			"a portion that joins another train goes where that train goes, and doesn't terminate where it joins",
+			[]Service{
+				{TOC: "SN", PlannedDep: at("09:05"), Origins: to("LIT"), Destinations: []Endpoint{
+					to("HHE")[0], {CRS: to("VIC")[0].CRS, Via: &Via{Locs: []string{"GTW"}}, AssocRID: "main", AssocCat: "JJ"},
+				}},
+				{TOC: "SN", PlannedArr: at("09:10"), Platform: "5", Origins: to("LIT"), Destinations: []Endpoint{
+					to("BTN")[0], {CRS: to("VIC")[0].CRS, AssocRID: "main", AssocCat: "JJ"},
+				}},
+				{TOC: "SN", PlannedDep: at("09:14"), Platform: "5", Origins: to("EBN", "LIT"), Destinations: to("VIC")},
+			},
+			"(2s) s.the next train is the | hour.s.09 | mins.m.05 | toc.m.southern service to | station.m.VIC | m.via | station.e.GTW" +
+				" | (2s) s.the next service from platform 5 will be the | hour.s.09 | mins.m.14 | toc.m.southern service to | station.e.VIC",
+		},
+		{
+			"an endpoint with no station is left out, and the one before it ends the sentence",
+			[]Service{
+				{TOC: "SN", PlannedDep: at("09:05"), Destinations: []Endpoint{to("VIC")[0], {AssocRID: "unknown", AssocCat: "VV"}}},
+				{TOC: "SN", PlannedArr: at("09:10"), Origins: []Endpoint{to("VIC")[0], to("LBG")[0], {AssocRID: "unknown", AssocCat: "JJ"}}},
+			},
+			"(2s) s.the next train is the | hour.s.09 | mins.m.05 | toc.m.southern service to | station.e.VIC" +
+				" | (2s) s.the next train | m.will be the | hour.s.09 | mins.m.10 | toc.m.southern service from | station.m.VIC | m.and | station.e.LBG" +
+				" | (500ms) w.this train terminates here",
+		},
+		{
 			"London Northwestern Railway is told from West Midlands Railway by destination",
 			[]Service{
 				{TOC: "LM", PlannedDep: at("09:05"), Destinations: to("EUS")},

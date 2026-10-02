@@ -339,7 +339,10 @@ func (s *System) stoppedAtStationAudio(o stoppedOptions) ([]plan.Clip, error) {
 	}
 	files = append(files, destinationAudio(o.divisionOptions, o.TerminatesAtCode)...)
 
-	if len(remainingStops) > 1 {
+	// A lone remaining stop is the terminus, which has just been named, unless
+	// the train divides: then it's the station where the train divides, which
+	// nothing else names.
+	if len(remainingStops) > 1 || o.DividesEnRoute.truthy {
 		files = append(files, plan.Clip{ID: "calling at"})
 		files = append(files, plan.Pluralise(remainingStops, plan.PluraliseOptions{BeforeAndDelay: plan.Ptr(75)})...)
 	}

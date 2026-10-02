@@ -98,11 +98,17 @@ func (v *Voice) basicTrainInfo(hour, min, toc string, vias []string, terminating
 	dividesAt := slices.IndexFunc(callingAt, CallingPoint.splits)
 	if dividesAt != -1 && len(callingAt[dividesAt].SplitCallingPoints) > 0 {
 		point := callingAt[dividesAt]
-		other := point.CRSCode
+		lastStop := func(points []CallingPoint) string { return points[len(points)-1].CRSCode }
+		destinations := []string{terminating, point.CRSCode}
 		if point.SplitType != "splitTerminates" {
-			other = point.SplitCallingPoints[len(point.SplitCallingPoints)-1].CRSCode
+			destinations[1] = lastStop(point.SplitCallingPoints)
 		}
-		return append(files, plan.Pluralise(plan.IDs(terminating, other), plan.PluraliseOptions{
+		for _, further := range point.FurtherSplits {
+			if len(further.SplitCallingPoints) > 0 {
+				destinations = append(destinations, lastStop(further.SplitCallingPoints))
+			}
+		}
+		return append(files, plan.Pluralise(plan.IDs(destinations...), plan.PluraliseOptions{
 			Prefix:          plan.Ptr("station.m."),
 			FinalPrefix:     plan.Ptr("station." + end + "."),
 			AndID:           "m.and",
@@ -180,6 +186,9 @@ type splitInfo struct {
 	stopsUpTo  []splitStop
 	splitA     *splitPortion
 	splitB     *splitPortion
+	// further are the portions that divide off beyond the first, which only
+	// the live feed describes.
+	further []*splitPortion
 }
 
 func (s splitInfo) allStops() []splitStop {
@@ -189,6 +198,9 @@ func (s splitInfo) allStops() []splitStop {
 	}
 	if s.splitB != nil {
 		all = append(all, s.splitB.stops...)
+	}
+	for _, portion := range s.further {
+		all = append(all, portion.stops...)
 	}
 	return all
 }
@@ -238,12 +250,41 @@ func (v *Voice) splitInfo(callingAt []CallingPoint, terminating string, overallL
 		form = *point.SplitForm
 	}
 	bPos, bCount := splitForm(form)
-	aPos := "front"
-	if bPos == "front" {
+	type furtherForm struct {
+		position string
+		count    *int
+		points   []CallingPoint
+	}
+	further := make([]furtherForm, len(point.FurtherSplits))
+	// The rest of the train is at an end that no portion dividing off is at,
+	// wherever those are known to be.
+	taken := []string{bPos}
+	counts := []*int{bCount}
+	for i, split := range point.FurtherSplits {
+		position, count := splitForm(split.SplitForm)
+		further[i] = furtherForm{position, count, split.SplitCallingPoints}
+		taken, counts = append(taken, position), append(counts, count)
+	}
+	aPos := "middle"
+	switch {
+	case slices.Contains(taken, "unknown"):
+		aPos = "unknown"
+	case !slices.Contains(taken, "front"):
+		aPos = "front"
+	case !slices.Contains(taken, "rear"):
 		aPos = "rear"
 	}
 
-	known := overallLength != nil && *overallLength != 0 && bCount != nil && *bCount != 0
+	dividing := 0
+	known := overallLength != nil && *overallLength != 0
+	for _, count := range counts {
+		if count == nil || *count == 0 {
+			known = false
+			break
+		}
+		dividing += *count
+	}
+	known = known && dividing != 0
 	if !known {
 		unknown := func(points []CallingPoint, position string) []splitStop {
 			stops := make([]splitStop, len(points))
@@ -260,21 +301,27 @@ func (v *Voice) splitInfo(callingAt []CallingPoint, terminating string, overallL
 		for i, p := range before {
 			upTo[i] = splitStop{p.CRSCode, p.ShortPlatform, p.RequestStop, portionInfo{"any", nil}}
 		}
-		// This portion's length comes from the split form, so it's known even
+		// A portion's length comes from the split form, so it's known even
 		// when the train's isn't.
-		bLength := bCount
-		if bLength != nil && *bLength == 0 {
-			bLength = nil
+		length := func(count *int) *int {
+			if count != nil && *count == 0 {
+				return nil
+			}
+			return count
 		}
-		return splitInfo{
+		info := splitInfo{
 			divideType: point.SplitType,
 			stopsUpTo:  upTo,
-			splitB:     &splitPortion{unknown(point.SplitCallingPoints, bPos), bPos, bLength},
+			splitB:     &splitPortion{unknown(point.SplitCallingPoints, bPos), bPos, length(bCount)},
 			splitA:     &splitPortion{unknown(after, aPos), aPos, nil},
 		}
+		for _, split := range further {
+			info.further = append(info.further, &splitPortion{unknown(split.points, split.position), split.position, length(split.count)})
+		}
+		return info
 	}
 
-	aCount := min(max(1, *overallLength-*bCount), 12)
+	aCount := min(max(1, *overallLength-dividing), 12)
 	portion := func(points []CallingPoint, position string, length int) []splitStop {
 		stops := make([]splitStop, len(points))
 		for i, p := range points {
@@ -290,12 +337,16 @@ func (v *Voice) splitInfo(callingAt []CallingPoint, terminating string, overallL
 	if point.SplitType != "splitTerminates" {
 		bStops = portion(point.SplitCallingPoints, bPos, *bCount)
 	}
-	return splitInfo{
+	info := splitInfo{
 		divideType: point.SplitType,
 		stopsUpTo:  upTo,
 		splitB:     &splitPortion{bStops, bPos, bCount},
 		splitA:     &splitPortion{portion(after, aPos, aCount), aPos, &aCount},
 	}
+	for _, split := range further {
+		info.further = append(info.further, &splitPortion{portion(split.points, split.position, *split.count), split.position, split.count})
+	}
+	return info
 }
 
 func lengthText(n *int) string {
@@ -325,7 +376,9 @@ func (v *Voice) shortPlatformClips(short string, stop portionInfo, afterSplit bo
 		return join(false)
 	case !afterSplit:
 		return nil
-	case position == "unknown":
+	// The coaches to join can't be placed within a portion whose own place in
+	// the train isn't known.
+	case position == "unknown" || stop.position == "unknown":
 		return []string{v.ShortPlatformOptions.UnknownLocation}
 	case stop.position == position:
 		return join(false)
@@ -526,12 +579,15 @@ func (v *Voice) callingPointsWithSplits(callingAt []CallingPoint, terminating st
 		files = append(files, plan.IDs(v.SplitOptions.TravelInAnyPartIDs...)...)
 	}
 
-	if split.splitA.position == "front" {
-		files = append(files, portionFiles(split.splitA)...)
+	if split.splitA.position == "rear" {
 		files = append(files, portionFiles(split.splitB)...)
+		files = append(files, portionFiles(split.splitA)...)
 	} else {
-		files = append(files, portionFiles(split.splitB)...)
 		files = append(files, portionFiles(split.splitA)...)
+		files = append(files, portionFiles(split.splitB)...)
+	}
+	for _, portion := range split.further {
+		files = append(files, portionFiles(portion)...)
 	}
 
 	if split.divideType == "splitTerminates" || split.divideType == "splits" {

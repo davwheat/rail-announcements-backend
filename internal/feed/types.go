@@ -102,6 +102,26 @@ type Call struct {
 	DetachFront      *bool     `json:"detach_front"`
 	FalseDestination *Location `json:"false_destination"`
 	CoachCount       *int      `json:"coach_count"`
+	// FormationChange is the coaches that leave or join the train at this
+	// call. Nil when none do, or when nothing says.
+	FormationChange *FormationChange `json:"formation_change,omitempty"`
+}
+
+// FormationChange is how a train's formation changes at a call while it stays
+// one service: coaches left behind there, or coaches coupled on. A portion that
+// divides off or joins as a service of its own is a Portion instead.
+type FormationChange struct {
+	Detached *FormationPart `json:"detached"`
+	Attached *FormationPart `json:"attached"`
+}
+
+// FormationPart is the coaches that leave or join a train.
+type FormationPart struct {
+	// Coaches is how many passenger coaches, or nil when unknown.
+	Coaches *int `json:"coaches"`
+	// Position is the end of the train, as it arrives, that coaches which
+	// leave are at: "front" or "rear". Nil for coaches that join.
+	Position *string `json:"position"`
 }
 
 type Portion struct {
@@ -119,6 +139,16 @@ type Portion struct {
 	CoachCount   *int      `json:"coach_count"`
 	Position     *string   `json:"position"`
 	Calls        []Call    `json:"calls"`
+	// Main is whether the service that holds this association is its main
+	// service. Passengers leave the main service of a link for the associated
+	// one. The main service of a join is the train that is joined, and of a
+	// division the train that divides, so false means that the movement's
+	// service is the portion that joins or divides off. It is nil when Darwin
+	// hasn't said which end is which.
+	Main *bool `json:"main"`
+	// Links are the links this portion's own service hands its passengers to,
+	// each with its own in turn.
+	Links []Portion `json:"links"`
 }
 
 type Coach struct {
@@ -134,6 +164,7 @@ type Movement struct {
 	RID              string     `json:"rid"`
 	Station          Location   `json:"station"`
 	Kind             string     `json:"kind"`
+	Mode             string     `json:"mode"`
 	UID              *string    `json:"uid"`
 	Headcode         *string    `json:"headcode"`
 	OperatorCode     *string    `json:"operator_code"`
