@@ -53271,6 +53271,14 @@
   {
    "value": "rear.12",
    "title": "Rear 12 coaches"
+  },
+  {
+   "value": "front",
+   "title": "Front coaches (length unknown)"
+  },
+  {
+   "value": "rear",
+   "title": "Rear coaches (length unknown)"
   }
  ],
  "ALL_AVAILABLE_TOCS": [

@@ -158,6 +158,47 @@ func calls(in []*livepb.Call) []Call {
 			DetachFront:      c.DetachFront,
 			FalseDestination: optionalLocation(c.GetFalseDestination()),
 			CoachCount:       count(c.CoachCount),
+			FormationChange:  formationChange(c.GetFormationChange()),
+		}
+	}
+	return out
+}
+
+func formationChange(c *livepb.FormationChange) *FormationChange {
+	if c == nil {
+		return nil
+	}
+	part := func(p *livepb.FormationPart) *FormationPart {
+		if p == nil {
+			return nil
+		}
+		return &FormationPart{Coaches: count(p.Coaches), Position: p.Position}
+	}
+	return &FormationChange{Detached: part(c.GetDetached()), Attached: part(c.GetAttached())}
+}
+
+func portions(in []*livepb.Portion) []Portion {
+	out := make([]Portion, len(in))
+	for i, p := range in {
+		out[i] = Portion{
+			Headcode:     p.Headcode,
+			OperatorCode: p.OperatorCode,
+			OperatorName: p.OperatorName,
+			Origin:       optionalLocation(p.GetOrigin()),
+			Destination:  optionalLocation(p.GetDestination()),
+			RID:          p.GetRid(),
+			Category:     p.GetCategory(),
+			At:           location(p.GetAt()),
+			Cancelled:    p.GetCancelled(),
+			Available:    p.GetAvailable(),
+			CoachCount:   count(p.CoachCount),
+			Position:     p.Position,
+			Calls:        calls(p.GetCalls()),
+			Main:         p.Main,
+			Links:        portions(p.GetLinks()),
+		}
+		if mode, ok := transportModes[p.GetMode()]; ok {
+			out[i].Mode = &mode
 		}
 	}
 	return out
@@ -169,6 +210,7 @@ func movement(m *livepb.Movement) Movement {
 		RID:              m.GetRid(),
 		Station:          location(m.GetStation()),
 		Kind:             movementKinds[m.GetKind()],
+		Mode:             transportModes[m.GetMode()],
 		UID:              m.Uid,
 		Headcode:         m.Headcode,
 		OperatorCode:     m.OperatorCode,
@@ -187,34 +229,13 @@ func movement(m *livepb.Movement) Movement {
 		Origins:          endpoints(m.GetOrigins()),
 		Destinations:     endpoints(m.GetDestinations()),
 		CallingPoints:    calls(m.GetCallingPoints()),
-		Portions:         make([]Portion, len(m.GetPortions())),
+		Portions:         portions(m.GetPortions()),
 	}
 	if list := m.GetCoaches(); list != nil {
 		out.Coaches = make([]Coach, len(list.GetCoaches()))
 		for i, coach := range list.GetCoaches() {
 			out.Coaches[i] = Coach{Number: coach.GetNumber(), LoadingPercent: count(coach.LoadingPercent)}
 		}
-	}
-	for i, p := range m.GetPortions() {
-		portion := Portion{
-			Headcode:     p.Headcode,
-			OperatorCode: p.OperatorCode,
-			OperatorName: p.OperatorName,
-			Origin:       optionalLocation(p.GetOrigin()),
-			Destination:  optionalLocation(p.GetDestination()),
-			RID:          p.GetRid(),
-			Category:     p.GetCategory(),
-			At:           location(p.GetAt()),
-			Cancelled:    p.GetCancelled(),
-			Available:    p.GetAvailable(),
-			CoachCount:   count(p.CoachCount),
-			Position:     p.Position,
-			Calls:        calls(p.GetCalls()),
-		}
-		if mode, ok := transportModes[p.GetMode()]; ok {
-			portion.Mode = &mode
-		}
-		out.Portions[i] = portion
 	}
 	return out
 }

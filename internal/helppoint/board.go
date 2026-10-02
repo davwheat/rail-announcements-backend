@@ -48,6 +48,10 @@ type Endpoint struct {
 	// AssocRID names the portion that joins or divides to reach this endpoint.
 	// It's empty on the service's own.
 	AssocRID string `json:"assoc_rid"`
+	// AssocCat is that association's category: "JJ" for a join, "VV" for a
+	// division. A "JJ" destination is where the train that this service joins
+	// goes on to.
+	AssocCat string `json:"assoc_cat"`
 }
 
 // Service is one row of the departure board.
