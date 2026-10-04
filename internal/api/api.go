@@ -34,8 +34,11 @@ const (
 	// ordinary pauses.
 	firstSegments    = 3
 	firstSegmentWait = 15 * time.Second
-	maxStateBytes    = 1 << 20
-	renderTimeout    = 60 * time.Second
+	// maxTrim bounds the silence that a response can still have left to leave
+	// out. A player that is further behind than this starts its stream again.
+	maxTrim       = time.Minute
+	maxStateBytes = 1 << 20
+	renderTimeout = 60 * time.Second
 )
 
 type Logger interface {
@@ -43,8 +46,9 @@ type Logger interface {
 }
 
 var (
-	crsPattern = regexp.MustCompile(`^[A-Z]{3}$`)
-	errEmpty   = errors.New("nothing to say")
+	crsPattern      = regexp.MustCompile(`^[A-Z]{3}$`)
+	listenerPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
+	errEmpty        = errors.New("nothing to say")
 )
 
 type Server struct {
@@ -67,6 +71,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	r.Get("/v1/streams/live.m3u8", s.playlist)
 	r.Get("/v1/streams/live.mp3", s.progressive)
+	r.Post("/v1/streams/trim", s.trim)
 	r.Get("/v1/streams/{key}/{segment}", s.segment)
 	r.Get("/v1/systems", s.systems)
 	r.Post("/v1/announcements", s.render)
@@ -133,6 +138,11 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) *stream.Stream {
 // tab with no script running, which a playlist that has to be polled cannot
 // promise.
 func (s *Server) progressive(w http.ResponseWriter, r *http.Request) {
+	listener := r.URL.Query().Get("listener")
+	if listener != "" && !listenerPattern.MatchString(listener) {
+		writeError(w, http.StatusBadRequest, "bad_listener", "listener must be 8 to 64 letters, digits, hyphens or underscores")
+		return
+	}
 	live := s.stream(w, r)
 	if live == nil {
 		return
@@ -145,7 +155,7 @@ func (s *Server) progressive(w http.ResponseWriter, r *http.Request) {
 	// A player starts only once it holds a few seconds of audio, and it then stays
 	// that far behind, because audio that arrives in real time never lets it catch
 	// up. Opening with the recent past costs the same delay without the wait.
-	recent, frames, stop := live.Radio.Listen()
+	recent, frames, stop := live.Radio.Listen(listener)
 	defer stop()
 
 	w.Header().Set("Content-Type", "audio/mpeg")
@@ -175,6 +185,38 @@ func (s *Server) progressive(w http.ResponseWriter, r *http.Request) {
 			controller.Flush()
 		}
 	}
+}
+
+// trim leaves silence out of one listener's MP3 response. An endless response
+// has no live edge, so a player that stalled is behind for good, and only the
+// player knows by how much: the audio it has yet to play sits in network
+// buffers that the service cannot see. The player says how much shorter its
+// response should be in all, and the service leaves that much of the silence
+// between announcements out of it. Nothing that was said is lost, and the
+// player keeps its connection.
+func (s *Server) trim(w http.ResponseWriter, r *http.Request) {
+	zone, err := stream.ParseZone(r.URL.Query())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_zone", err.Error())
+		return
+	}
+	total, err := strconv.ParseFloat(r.URL.Query().Get("total"), 64)
+	if err != nil || !(total >= 0 && total <= (24*time.Hour).Seconds()) {
+		writeError(w, http.StatusBadRequest, "bad_total", "total must be the seconds of silence to leave out of the response in all")
+		return
+	}
+	// Looked up and never started: a stream that has gone has no response to trim.
+	live := s.streams.Lookup(zone.Key())
+	if live == nil {
+		writeError(w, http.StatusNotFound, "no_listener", "no such stream is playing")
+		return
+	}
+	trimmed, pending, ok := live.Trim(r.URL.Query().Get("listener"), time.Duration(total*float64(time.Second)), maxTrim)
+	if !ok {
+		writeError(w, http.StatusNotFound, "no_listener", "nobody is listening to the stream by that name")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]float64{"trimmed": trimmed.Seconds(), "pending": pending.Seconds()})
 }
 
 func (s *Server) playlist(w http.ResponseWriter, r *http.Request) {

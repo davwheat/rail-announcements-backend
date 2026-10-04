@@ -310,7 +310,7 @@ func TestAStreamThatStopsLeavesNoEncoderBehind(t *testing.T) {
 	if err := live.StartRadio(); err != nil {
 		t.Fatal(err)
 	}
-	_, frames, stop := live.Radio.Listen()
+	_, frames, stop := live.Radio.Listen("")
 	defer stop()
 	select {
 	case <-frames:

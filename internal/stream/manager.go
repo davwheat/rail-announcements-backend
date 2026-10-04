@@ -72,8 +72,10 @@ func (m *Manager) Get(zone Zone) (*Stream, error) {
 		Zone:     zone,
 		Key:      key,
 		Playlist: hls.NewPlaylist(audio.SampleRate, m.options.SegmentDuration, m.options.Window, time.Now()),
-		// Three seconds of frames lead a new radio listener in.
-		Radio:    hls.NewBroadcast(3 * audio.SampleRate / 1152),
+		// Three seconds of frames lead a new radio listener in. The longest pause
+		// inside an announcement is under a second, so two seconds of silence is
+		// a gap between announcements.
+		Radio:    hls.NewBroadcast(3*audio.SampleRate/hls.MP3SamplesPerFrame, 2*audio.SampleRate/hls.MP3SamplesPerFrame),
 		renderer: m.renderer,
 		log:      prefixed{m.log, "[" + zone.String() + "] "},
 		now:      time.Now,

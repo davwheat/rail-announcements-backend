@@ -224,15 +224,15 @@ func framesArriveLive(t *testing.T, codec Codec) {
 }
 
 func TestListenersHearEveryFrameUntilTheyFallBehind(t *testing.T) {
-	broadcast := NewBroadcast(3)
+	broadcast := NewBroadcast(3, 0)
 	for i := range 5 {
 		broadcast.Add([]byte{byte(100 + i)})
 	}
-	recent, keen, stopKeen := broadcast.Listen()
+	recent, keen, stopKeen := broadcast.Listen("")
 	if !bytes.Equal(recent, []byte{102, 103, 104}) {
 		t.Errorf("a new listener is led in with % d, want the last three frames", recent)
 	}
-	_, slow, stopSlow := broadcast.Listen()
+	_, slow, stopSlow := broadcast.Listen("")
 	defer stopSlow()
 
 	for i := range listenerBuffer + 10 {
@@ -254,12 +254,254 @@ func TestListenersHearEveryFrameUntilTheyFallBehind(t *testing.T) {
 	if _, open := <-keen; open {
 		t.Error("a stopped listener is still open")
 	}
-	_, late, _ := broadcast.Listen()
+	_, late, _ := broadcast.Listen("")
 	broadcast.Close()
 	if _, open := <-late; open {
 		t.Error("closing the broadcast left a listener waiting")
 	}
-	if _, after, _ := broadcast.Listen(); func() bool { _, open := <-after; return open }() {
+	if _, after, _ := broadcast.Listen(""); func() bool { _, open := <-after; return open }() {
 		t.Error("a listener who arrives after the end waits for ever")
 	}
+}
+
+// mp3Frame builds a mono 64 kbit/s frame, which is 208 bytes at 44.1 kHz. A
+// frame of speech has data in its second granule, and tag ends the frame so
+// that a test can tell one frame from the next.
+func mp3Frame(speech bool, tag byte) []byte {
+	frame := make([]byte, 208)
+	copy(frame, []byte{0xFF, 0xFB, 0x50, 0xC0})
+	if speech {
+		// The second granule's part2_3_length is 12 bits from bit 77 of the side
+		// information, which starts after the four bytes of header.
+		frame[4+10] = 0x01
+	}
+	frame[len(frame)-1] = tag
+	return frame
+}
+
+func TestSilentFramesAreToldFromSpeech(t *testing.T) {
+	if !silentMP3Frame(mp3Frame(false, 9)) {
+		t.Error("a frame with no audio data is silence")
+	}
+	if silentMP3Frame(mp3Frame(true, 0)) {
+		t.Error("a frame with audio data in its second granule is not silence")
+	}
+	first := mp3Frame(false, 0)
+	first[4+2] = 0x20
+	if silentMP3Frame(first) {
+		t.Error("a frame with audio data in its first granule is not silence")
+	}
+	stereo := mp3Frame(false, 0)
+	stereo[3] = 0x00
+	if silentMP3Frame(stereo) || silentMP3Frame([]byte{0xFF, 0xFB, 0x50}) || silentMP3Frame([]byte{1}) {
+		t.Error("only a whole mono frame can be told to be silent")
+	}
+	// A checksum pushes the side information two bytes on.
+	checked := append([]byte{0xFF, 0xFA, 0x50, 0xC0, 0, 0}, make([]byte, 202)...)
+	if !silentMP3Frame(checked) {
+		t.Error("a silent frame with a checksum is silence")
+	}
+	checked[6+10] = 0x01
+	if silentMP3Frame(checked) {
+		t.Error("a frame of speech with a checksum is not silence")
+	}
+
+	// A frame reads its audio from up to 511 bytes before it, and a frame's
+	// room for audio is what its header and side information leave.
+	for size, want := range map[int]int{208: 3, 209: 3, 78: 9, 835: 1} {
+		frame := append([]byte{0xFF, 0xFB, 0x50, 0xC0}, make([]byte, size-4)...)
+		if got := mp3Reach(frame); got != want {
+			t.Errorf("a %d-byte frame reaches %d frames back, want %d", size, got, want)
+		}
+	}
+}
+
+// A player that stalled is behind for as long as it listens. Leaving out
+// silence that it has yet to receive brings it back, as long as what is left
+// out is never a pause inside an announcement and never a frame that the
+// speech after it reads its audio from.
+func TestALateListenerIsSparedSilenceAndEveryOtherFrame(t *testing.T) {
+	const gap, reach = 5, 3
+	type run struct {
+		speech bool
+		frames int
+	}
+	play := func(broadcast *Broadcast, runs []run) (sent []byte) {
+		tag := byte(0)
+		for _, r := range runs {
+			for range r.frames {
+				broadcast.Add(mp3Frame(r.speech, tag))
+				sent = append(sent, tag)
+				tag++
+			}
+		}
+		return sent
+	}
+	heard := func(frames <-chan []byte) (tags []byte) {
+		for {
+			select {
+			case frame := <-frames:
+				tags = append(tags, frame[len(frame)-1])
+			default:
+				return tags
+			}
+		}
+	}
+	runs := []run{{true, 2}, {false, 20}, {true, 2}, {false, 4}, {true, 1}, {false, 30}}
+
+	broadcast := NewBroadcast(0, gap)
+	_, late, stopLate := broadcast.Listen("late-listener")
+	defer stopLate()
+	_, punctual, stopPunctual := broadcast.Listen("")
+	defer stopPunctual()
+	if _, _, ok := broadcast.Trim("nobody-there", 10, 100); ok {
+		t.Error("silence was left out for a listener that is not there")
+	}
+	if trimmed, pending, ok := broadcast.Trim("late-listener", 10, 100); !ok || trimmed != 0 || pending != 10 {
+		t.Errorf("asked for 10 frames: %d left out, %d to come, %v", trimmed, pending, ok)
+	}
+	sent := play(broadcast, runs)
+	if got := heard(punctual); !bytes.Equal(got, sent) {
+		t.Errorf("a listener that asked for nothing heard %d of %d frames", len(got), len(sent))
+	}
+	// The first silence is 20 frames. Its first five are a pause that could be
+	// part of an announcement, so the ten left out are the ten after those.
+	want := append(append([]byte{}, sent[:2+gap]...), sent[2+gap+10:]...)
+	if got := heard(late); !bytes.Equal(got, want) {
+		t.Errorf("the late listener heard frames\n%v, want\n%v", got, want)
+	}
+	if trimmed, pending, _ := broadcast.Trim("late-listener", 10, 100); trimmed != 10 || pending != 0 {
+		t.Errorf("asked for the same total again: %d left out, %d to come, want 10 and 0", trimmed, pending)
+	}
+
+	// Asked for more than the silence holds, the frames that speech can reach
+	// back to still go out, ahead of the speech.
+	broadcast = NewBroadcast(0, gap)
+	_, late, stopLate = broadcast.Listen("late-listener")
+	defer stopLate()
+	if _, pending, _ := broadcast.Trim("late-listener", 1000, 40); pending != 40 {
+		t.Errorf("%d frames to come, want the 40 that the request is bounded by", pending)
+	}
+	sent = play(broadcast, runs[:3])
+	want = append(append([]byte{}, sent[:2+gap]...), sent[2+20-reach:]...)
+	if got := heard(late); !bytes.Equal(got, want) {
+		t.Errorf("the late listener heard frames\n%v, want\n%v", got, want)
+	}
+	if trimmed, pending, _ := broadcast.Trim("late-listener", 0, 40); trimmed != 20-gap-reach || pending != 0 {
+		t.Errorf("%d frames left out and %d to come, want %d and none once the listener asks for no more", trimmed, pending, 20-gap-reach)
+	}
+}
+
+// TestLeavingSilenceOutLosesNoSpeech checks the same against the real
+// encoder, whose frames of speech do keep their audio in the silent frames
+// before them.
+func TestLeavingSilenceOutLosesNoSpeech(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is not installed")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	const rate = 44100
+	// Noise takes every bit the encoder has, so it leans on the frames before
+	// it as hard as speech ever does.
+	seed := uint32(1)
+	noise := func(seconds float64) []byte {
+		pcm := make([]byte, 0, int(seconds*rate)*2)
+		for range int(seconds * rate) {
+			seed = seed*1664525 + 1013904223
+			pcm = binary.LittleEndian.AppendUint16(pcm, uint16(int16(seed>>16)/4))
+		}
+		return pcm
+	}
+	silence := func(seconds float64) []byte { return make([]byte, int(seconds*rate)*2) }
+	var pcm []byte
+	for _, part := range [][]byte{silence(3), noise(1.2), silence(0.5), noise(0.8), silence(4), noise(1), silence(3)} {
+		pcm = append(pcm, part...)
+	}
+
+	encoder, err := StartEncoder(ctx, "", MP3, rate, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broadcast := NewBroadcast(0, 2*rate/MP3SamplesPerFrame)
+	_, late, stopLate := broadcast.Listen("late-listener")
+	defer stopLate()
+	_, punctual, stopPunctual := broadcast.Listen("")
+	defer stopPunctual()
+	broadcast.Trim("late-listener", 1000, 1000)
+	fed := make(chan int)
+	go func() {
+		frames := 0
+		for frame := range encoder.Frames {
+			broadcast.Add(frame)
+			frames++
+		}
+		fed <- frames
+	}()
+	if _, err := encoder.Write(pcm); err != nil {
+		t.Fatal(err)
+	}
+	if err := encoder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	frames := <-fed
+	trimmed, _, _ := broadcast.Trim("late-listener", 0, 0)
+
+	decode := func(frames <-chan []byte) []int16 {
+		var mp3 []byte
+		for len(frames) > 0 {
+			mp3 = append(mp3, <-frames...)
+		}
+		cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-f", "mp3", "-i", "-", "-f", "s16le", "-ac", "1", "-ar", fmt.Sprint(rate), "-")
+		cmd.Stdin = bytes.NewReader(mp3)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("ffmpeg could not decode the response: %v", err)
+		}
+		samples := make([]int16, len(out)/2)
+		for i := range samples {
+			samples[i] = int16(binary.LittleEndian.Uint16(out[2*i:]))
+		}
+		return samples
+	}
+	// Each stretch of sound, as the sum of its samples' sizes.
+	sounds := func(samples []int16) (out []int) {
+		const quiet = rate / 10
+		current, last := 0, -1
+		for i, sample := range samples {
+			if sample > -200 && sample < 200 {
+				continue
+			}
+			if last >= 0 && i-last > quiet {
+				out = append(out, current)
+				current = 0
+			}
+			last = i
+			current += max(int(sample), -int(sample))
+		}
+		if last >= 0 {
+			out = append(out, current)
+		}
+		return out
+	}
+	whole, shortened := decode(punctual), decode(late)
+	// The first two silences leave out everything after their first two seconds
+	// but the frames that the noise after them reads from. The last silence has
+	// no sound after it, and those frames are held to the end.
+	if trimmed < frames/8 {
+		t.Fatalf("only %d of %d frames were left out", trimmed, frames)
+	}
+	if got, want := len(whole)-len(shortened), trimmed*MP3SamplesPerFrame; got < want || got > want+4*MP3SamplesPerFrame {
+		t.Errorf("the late listener's response is %d samples shorter, want the %d left out", got, want)
+	}
+	before, after := sounds(whole), sounds(shortened)
+	if len(before) != 3 || len(after) != 3 {
+		t.Fatalf("%d sounds in the whole response and %d in the shortened one, want 3 in each", len(before), len(after))
+	}
+	for i := range before {
+		if before[i] != after[i] {
+			t.Errorf("sound %d lost or gained audio when silence was left out: its samples add up to %d, and to %d in the whole response", i, after[i], before[i])
+		}
+	}
+	t.Logf("%d of %d frames left out, and each sound decodes the same: %v", trimmed, frames, after)
 }

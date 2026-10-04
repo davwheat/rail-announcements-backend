@@ -92,6 +92,45 @@ that is still polling the playlist carries on with the new stream's audio. See
 | `fast_train_approaching` | Whether a fast train warning ends with "fast train approaching". | `false` |
 | `fanfare` | Whether a fast train warning starts with the Daktronics fanfare. | `false` |
 | `missing_audio` | What to do when a recording is missing: `skip-service`, `play-silence`, `repeat-last-station` or `repeat-last`. | `skip-service` |
+| `listener` | A name for one `live.mp3` response, so that its player can ask for silence to be left out of it: 8 to 64 letters, digits, hyphens or underscores. It doesn't change which stream is played. | None |
+
+### Bring an MP3 player back to the present
+
+```
+POST /v1/streams/trim?crs=KGX&zone=1:phil,2:celia&zone=3:phil&listener=NAME&total=SECONDS
+```
+
+An MP3 response has no live edge. A player that stalls is that far behind for
+as long as it plays the response, and only the player knows by how much. To
+catch up without a new connection, and without losing anything that was said,
+a player asks the service to leave silence out of its own response:
+
+1.  Add `listener=NAME` to the `live.mp3` URL. Replace `NAME` with a name that
+    only this player knows, such as a random one, and use a different name for
+    each response.
+
+1.  When the player is behind, send the request, with the stream's own
+    parameters and the same `listener`. Replace `SECONDS` with how much shorter
+    the response has to be in all, counted from its start, and not with how
+    much more to leave out. Asking again with the same total then adds nothing.
+
+The service leaves out silence between announcements as it comes, and never a
+pause inside one. The response says how many seconds it has left out of the
+response so far, and how many are still to come:
+
+```json
+{"trimmed": 1.5, "pending": 2.5}
+```
+
+A player's own clock doesn't show the silence that was left out, so subtract
+`trimmed` from the lag that the player measures. Don't ask for more than the
+player is behind: silence left out beyond what the player holds runs it dry.
+
+| Status | Code | Meaning |
+|---|---|---|
+| 400 | `bad_zone` | The stream's parameters are wrong. |
+| 400 | `bad_total` | `total` isn't a number of seconds. |
+| 404 | `no_listener` | The stream isn't playing, or nobody is listening to it by that name. |
 
 ## Render one announcement
 

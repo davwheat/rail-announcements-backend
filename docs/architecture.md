@@ -92,6 +92,23 @@ through an announcement.
 - **No live edge.** A stall leaves an MP3 player behind for good. The service
   closes a response that falls about 15 seconds behind, and the website's
   player starts the stream again when it's more than 10 seconds behind.
+- **Silence is left out for a player that is behind.** Starting again drops
+  whatever was said in between. Short of 10 seconds, the website's player asks
+  the service to leave silence out of its own response instead
+  (`POST /v1/streams/trim`), which loses nothing and keeps the connection.
+  Only the player can ask: the audio that it has yet to play sits in network
+  buffers that the service can't see. The request names the total for the
+  whole response, so asking twice adds nothing.
+
+  The service finds silence without decoding anything: a silent MP3 frame has
+  no audio data, and its side information says so. Two rules keep an
+  announcement whole. A silence counts only once it has lasted two seconds,
+  because a pause inside an announcement, which is at most 870 milliseconds,
+  is part of how it is said. And a frame of speech reads its audio from up to
+  511 bytes of the frames before it, which is three frames at 64 kbit/s, so
+  the last frames of a silence always go out. `hls.Broadcast` holds them back
+  until it has seen what follows. Turning the encoder's bit reservoir off
+  would make every frame stand alone, at a cost in quality for every listener.
 - **A stall shorter than ten seconds costs no audio.** A player holds the three
   seconds the response opened with, and audio that arrives in real time never
   refills them, so a second the mixer skips is a second that listener loses for

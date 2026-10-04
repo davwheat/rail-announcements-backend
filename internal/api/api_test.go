@@ -269,6 +269,85 @@ func TestAConnectedListenerKeepsItsStream(t *testing.T) {
 	}
 }
 
+// A player that has fallen behind asks for silence to be left out of its own
+// response, and catches up without a new connection.
+func TestALateListenerIsSparedSilence(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is not installed")
+	}
+	hub, _ := feed.NewHub("http://127.0.0.1:1", testLog{t})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager := stream.NewManager(ctx, hub, nil, testLog{t}, stream.Options{
+		BitrateKbps: 64, SegmentDuration: time.Second, Window: 6, IdleTimeout: 30 * time.Second, MaxStreams: 2,
+	})
+	server := httptest.NewServer(New(manager, nil, nil, []string{"*"}, testLog{t}).Handler())
+	defer server.Close()
+
+	trim := func(query string) (status int, trimmed, pending float64) {
+		t.Helper()
+		response, err := http.Post(server.URL+"/v1/streams/trim?"+query, "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		var body struct{ Trimmed, Pending float64 }
+		json.NewDecoder(response.Body).Decode(&body)
+		return response.StatusCode, body.Trimmed, body.Pending
+	}
+
+	// Asking about a stream that isn't playing must not start it.
+	if status, _, _ := trim("crs=KGX&listener=late-listener&total=2"); status != http.StatusNotFound || manager.Count() != 0 {
+		t.Errorf("a stream that isn't playing: HTTP %d and %d streams, want 404 and none", status, manager.Count())
+	}
+	if response, _ := http.Get(server.URL + "/v1/streams/live.mp3?crs=KGX&listener=no"); response.StatusCode != http.StatusBadRequest {
+		t.Errorf("a listener name too short to be a secret: HTTP %d", response.StatusCode)
+	}
+
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/streams/live.mp3?crs=KGX&listener=late-listener", nil)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	started := time.Now()
+
+	for query, want := range map[string]int{
+		"crs=KGX&listener=someone-else&total=2":   http.StatusNotFound,
+		"crs=KGX&listener=late-listener&total=x":  http.StatusBadRequest,
+		"crs=KGX&listener=late-listener&total=-1": http.StatusBadRequest,
+		"listener=late-listener&total=2":          http.StatusBadRequest,
+	} {
+		if status, _, _ := trim(query); status != want {
+			t.Errorf("%s: HTTP %d, want %d", query, status, want)
+		}
+	}
+	if status, trimmed, pending := trim("crs=KGX&listener=late-listener&total=2"); status != http.StatusOK || trimmed != 0 || pending < 1.9 || pending > 2 {
+		t.Fatalf("HTTP %d, %.2f seconds left out and %.2f to come, want 200, none and two", status, trimmed, pending)
+	}
+
+	// The station is silent, and the response arrives as fast as it is played, at
+	// 8,000 bytes a second. Its first two seconds could be a pause inside an
+	// announcement, and the two after those are left out.
+	const listenFor = 7 * time.Second
+	received := 0
+	buffer := make([]byte, 8<<10)
+	for time.Since(started) < listenFor {
+		n, err := response.Body.Read(buffer)
+		received += n
+		if err != nil {
+			t.Fatalf("the response ended after %d bytes: %v", received, err)
+		}
+	}
+	if seconds := float64(received) / 8000; seconds < listenFor.Seconds()-3 || seconds > listenFor.Seconds()-1.5 {
+		t.Errorf("%.1f seconds of audio arrived in %s, want two seconds fewer", seconds, listenFor)
+	}
+	// Asking for the same total again adds nothing to it.
+	if status, trimmed, pending := trim("crs=KGX&listener=late-listener&total=2"); status != http.StatusOK || trimmed < 1.9 || trimmed > 2 || pending != 0 {
+		t.Errorf("HTTP %d, %.2f seconds left out and %.2f to come, want 200, two and none", status, trimmed, pending)
+	}
+}
+
 // TestTheListenersCushionSurvivesAColdFirstAnnouncement holds the mixer to
 // real time. The response arrives at the rate it is played, so audio the
 // service fails to send is taken out of the three seconds a player holds and
