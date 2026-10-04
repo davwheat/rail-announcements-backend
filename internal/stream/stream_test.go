@@ -5,6 +5,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net/url"
+	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -115,7 +118,7 @@ func start(t *testing.T, query string, samples int) (chan any, *capture, *fakeRe
 		t.Fatal(err)
 	}
 	renderer, output := &fakeRenderer{samples: samples}, &capture{}
-	s := &Stream{Zone: zone, Key: zone.Key(), Playlist: hls.NewPlaylist(audio.SampleRate, time.Second, 3, time.Now), renderer: renderer, log: quiet{t}, now: time.Now}
+	s := &Stream{Zone: zone, Key: zone.Key(), Playlist: hls.NewPlaylist(audio.SampleRate, time.Second, 3, time.Now()), renderer: renderer, log: quiet{t}, now: time.Now}
 	messages := make(chan any, 16)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -260,6 +263,64 @@ func eventually(t *testing.T, what string, condition func() bool) {
 		}
 	}
 	t.Fatalf("never happened: %s", what)
+}
+
+// deadChildren counts the processes that this one started, that have exited,
+// and that nothing has waited for.
+func deadChildren(t *testing.T) int {
+	t.Helper()
+	out, err := exec.Command("ps", "-axo", "ppid=,stat=").Output()
+	if err != nil {
+		t.Skipf("ps cannot list processes here: %v", err)
+	}
+	dead := 0
+	for _, line := range strings.Split(string(out), "\n") {
+		if fields := strings.Fields(line); len(fields) == 2 && fields[0] == strconv.Itoa(os.Getpid()) && strings.HasPrefix(fields[1], "Z") {
+			dead++
+		}
+	}
+	return dead
+}
+
+// A listener whose connection keeps dropping starts and stops streams all day,
+// and so does one who changes a voice or a zone. Whatever a stopped stream
+// leaves behind adds up until the service can start no more encoders.
+func TestAStreamThatStopsLeavesNoEncoderBehind(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is not installed")
+	}
+	hub, err := feed.NewHub("http://127.0.0.1:1", quiet{t})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager := NewManager(ctx, hub, &fakeRenderer{}, quiet{t}, Options{
+		BitrateKbps: 64, SegmentDuration: time.Second, Window: 3, IdleTimeout: time.Hour, MaxStreams: 1,
+	})
+	values, _ := url.ParseQuery("crs=KGX")
+	zone, err := ParseZone(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := manager.Get(zone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := live.StartRadio(); err != nil {
+		t.Fatal(err)
+	}
+	_, frames, stop := live.Radio.Listen()
+	defer stop()
+	select {
+	case <-frames:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the MP3 encoder produced nothing")
+	}
+
+	cancel()
+	eventually(t, "the stream stops", func() bool { return manager.Count() == 0 })
+	eventually(t, "both encoders are waited for", func() bool { return deadChildren(t) == 0 })
 }
 
 func TestAStreamPlaysItsZoneAndSilenceOtherwise(t *testing.T) {

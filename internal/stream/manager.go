@@ -71,7 +71,7 @@ func (m *Manager) Get(zone Zone) (*Stream, error) {
 	s := &Stream{
 		Zone:     zone,
 		Key:      key,
-		Playlist: hls.NewPlaylist(audio.SampleRate, m.options.SegmentDuration, m.options.Window, time.Now),
+		Playlist: hls.NewPlaylist(audio.SampleRate, m.options.SegmentDuration, m.options.Window, time.Now()),
 		// Three seconds of frames lead a new radio listener in.
 		Radio:    hls.NewBroadcast(3 * audio.SampleRate / 1152),
 		renderer: m.renderer,

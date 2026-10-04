@@ -75,8 +75,9 @@ HLS can't be played by Chrome or Firefox without a script that fetches segments
 and feeds them to the audio element, and that script is what a background tab
 throttles. So the same mix is also served as one endless MP3 response, which
 every browser plays from a plain `<audio>` element, as it plays internet radio.
-The website uses HLS where the browser plays it natively, which is Safari, and
-the MP3 response everywhere else.
+The website plays the MP3 response in every browser. A browser's claim to play
+HLS natively can't be relied on: Firefox makes it, and then fails part-way
+through an announcement.
 
 - **MP3, not AAC.** AAC spends about 500 bytes a second on silence. A browser
   reads tens of kilobytes before it decides what it has been given, so on a
@@ -89,8 +90,8 @@ the MP3 response everywhere else.
 - **Started on demand.** The MP3 encoder is a second ffmpeg process, so a
   stream starts it when the first listener asks for `live.mp3`.
 - **No live edge.** A stall leaves an MP3 player behind for good. The service
-  closes a response that falls about six seconds behind, and the website's
-  player skips forward when it holds more than four seconds of unplayed audio.
+  closes a response that falls about 15 seconds behind, and the website's
+  player starts the stream again when it's more than 10 seconds behind.
 - **A stall shorter than ten seconds costs no audio.** A player holds the three
   seconds the response opened with, and audio that arrives in real time never
   refills them, so a second the mixer skips is a second that listener loses for
@@ -146,21 +147,59 @@ in Go, and encodes once.
 
 A segment is raw ADTS frames behind an ID3 tag that holds the segment's
 timestamp ([RFC 8216, section 3.4](https://datatracker.ietf.org/doc/html/rfc8216#section-3.4)).
-No container is needed, so no muxer is either. hls.js in Chrome and ffmpeg both
-play it, and both were checked. Safari's native player takes the same format
-but hasn't been checked. The endless MP3 response was checked in Chrome.
+No container is needed, so no muxer is either. hls.js in Chrome, ffmpeg and
+AVPlayer on macOS, which is the player behind Safari, all play it, and all
+three were checked. The endless MP3 response was checked in Chrome and in
+AVPlayer.
 
-Media sequence numbers start from the clock. A stream that stops when idle and
-starts again keeps its URL, and a player that is still polling needs the
-sequence to keep rising.
+### A restarted stream keeps its place
+
+A stream stops when nobody has asked for it for a while, and when its replica
+is replaced. It keeps its URL, so a player that is still polling reads the new
+stream's playlist as the next version of the old one's. A listener whose
+connection dropped for longer than the idle timeout is in that position every
+time. Three things make the restart something a player recovers from:
+
+- **One timeline for every stream.** A segment's sequence number, its
+  timestamp and its date all come from its place in the time since the Unix
+  epoch, cut into segments. A restarted stream's sequence is then always
+  higher than the old stream's, and its audio is later. A segment is a little
+  shorter than a second, so a sequence that starts from the clock in seconds
+  and then counts segments runs ahead of the clock, and falls back at a
+  restart.
+- **A discontinuity sequence number for each start.** The audio on either side
+  of a restart comes from two encoders. A player learns that from
+  `EXT-X-DISCONTINUITY-SEQUENCE`, which is the stream's first sequence number
+  modulo 65,536, and plays the new audio straight after the old. Without it,
+  AVPlayer takes the segments that it missed for a gap in one recording, plays
+  the gap as silence, and stays that far behind. The number is small because
+  hls.js walks an array as long as the number after every reload: the first
+  sequence number itself, which is in the billions, holds the page up for
+  good.
+- **Three segments before the first playlist.** A player starts three segments
+  from the end of a playlist and keeps that distance as its buffer. Given two,
+  AVPlayer starts at the end, and plays with a buffer of about one second for
+  as long as it listens.
+
+A segment stays available for a playlist's length and one more segment after
+it leaves the playlist, as RFC 8216 section 6.2.2 asks. A client on a slow
+connection fetches from a playlist that it read that long ago.
+
+None of this returns a player to the live edge after a stall that the stream
+ran through. AVPlayer carries on from where it stopped, plays any segments
+that have left the playlist as silence, and stays that far behind. A
+discontinuity before every segment does bring it back, but AVPlayer then drops
+about 50 milliseconds of audio at each one. That's one more reason the website
+plays the MP3 response and checks its own lag.
 
 ### Delay
 
-A listener hears an announcement about two seconds after the service starts it,
-on HLS with one-second segments and on the MP3 response alike. The website's
-own audio has no such delay. Two
-seconds is acceptable for every announcement except a fast train warning, where
-it uses up some of the warning. `Stream.SegmentDuration` trades delay against
+A listener hears an announcement about two seconds after the service starts it
+on the MP3 response, and about three seconds after on HLS with one-second
+segments, where a player keeps three segments between itself and the end of
+the playlist. The website's own audio has no such delay. A delay that long is
+acceptable for every announcement except a fast train warning, where it uses
+up some of the warning. `Stream.SegmentDuration` trades delay against
 requests. If that isn't enough, the next step is Low-Latency HLS: partial
 segments and blocking playlist reloads, which `hls.Playlist` can grow into
 without changes elsewhere.

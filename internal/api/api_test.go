@@ -236,6 +236,39 @@ func TestTheStreamAlsoComesAsOneEndlessResponse(t *testing.T) {
 	}
 }
 
+// A listener who is connected is listening. The response has to say so more
+// often than the idle timeout runs out, or the stream stops under its listener.
+func TestAConnectedListenerKeepsItsStream(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is not installed")
+	}
+	hub, _ := feed.NewHub("http://127.0.0.1:1", testLog{t})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Half the shortest idle timeout that the configuration accepts. At the
+	// shortest itself, a response that speaks up every ten seconds survives or
+	// not by which of two timers fires first, and a test would pass by luck.
+	const idle = 5 * time.Second
+	manager := stream.NewManager(ctx, hub, nil, testLog{t}, stream.Options{
+		BitrateKbps: 64, SegmentDuration: time.Second, Window: 6, IdleTimeout: idle, MaxStreams: 1,
+	})
+	server := httptest.NewServer(New(manager, nil, nil, []string{"*"}, testLog{t}).Handler())
+	defer server.Close()
+
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/streams/live.mp3?crs=KGX", nil)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	// The response arrives as fast as it is played, at 8,000 bytes a second, so
+	// this much of it outlasts the idle timeout.
+	outlasting := make([]byte, int((idle+3*time.Second).Seconds())*8000)
+	if n, err := io.ReadFull(response.Body, outlasting); err != nil {
+		t.Fatalf("the stream stopped under its listener after %.1f seconds of audio: %v", float64(n)/8000, err)
+	}
+}
+
 // TestTheListenersCushionSurvivesAColdFirstAnnouncement holds the mixer to
 // real time. The response arrives at the rate it is played, so audio the
 // service fails to send is taken out of the three seconds a player holds and

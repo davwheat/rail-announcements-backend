@@ -96,6 +96,11 @@ func (s *Stream) StartRadio() error {
 				s.Radio.Add(frame)
 			}
 			s.Radio.Close()
+			// Nothing else waits for this encoder. Left unreaped, each stream
+			// that stops leaves a dead ffmpeg process and its pipes behind.
+			if err := encoder.Close(); err != nil {
+				s.log.Warnf("The MP3 encoder failed: %v", err)
+			}
 		}()
 		s.radio.Store(encoder)
 	})

@@ -27,8 +27,12 @@ import (
 
 const (
 	// firstSegments is how many segments a new stream must hold before its
-	// playlist is served. Players refuse to start on fewer.
-	firstSegments    = 2
+	// playlist is served. A player starts three segments from the end of a
+	// playlist (RFC 8216 section 6.3.3) and keeps that distance as its buffer.
+	// Given fewer, it starts at the end, and for as long as it listens its
+	// buffer is about one second, which is less than a mobile connection's
+	// ordinary pauses.
+	firstSegments    = 3
 	firstSegmentWait = 15 * time.Second
 	maxStateBytes    = 1 << 20
 	renderTimeout    = 60 * time.Second
@@ -150,7 +154,9 @@ func (s *Server) progressive(w http.ResponseWriter, r *http.Request) {
 	controller := http.NewResponseController(w)
 	w.Write(recent)
 	controller.Flush()
-	keepAlive := time.NewTicker(10 * time.Second)
+	// Well inside the shortest idle timeout that the configuration accepts, which
+	// is ten seconds. At that same interval the stream stops under its listener.
+	keepAlive := time.NewTicker(2 * time.Second)
 	defer keepAlive.Stop()
 	for {
 		select {
@@ -179,9 +185,15 @@ func (s *Server) playlist(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), firstSegmentWait)
 	defer cancel()
-	for live.Playlist.Len() < firstSegments {
+	for {
+		// Taken before the count: a segment cut between the two would otherwise
+		// go unnoticed, and the listener would wait for the one after it.
+		changed := live.Playlist.Changed()
+		if live.Playlist.Len() >= firstSegments {
+			break
+		}
 		select {
-		case <-live.Playlist.Changed():
+		case <-changed:
 		case <-ctx.Done():
 			w.Header().Set("Retry-After", "2")
 			writeError(w, http.StatusServiceUnavailable, "stream_starting", "the stream has no audio yet")

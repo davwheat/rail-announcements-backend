@@ -60,6 +60,15 @@ and `docs/architecture.md` for the design and the decisions.
   replicas, a stream lives in one replica's memory, and the proxy routes stream
   requests by that parameter (`deploy/Caddyfile`). A new stream endpoint that
   lacks it would be sent to either replica.
+- **A playlist's numbers come from the clock, and never from the stream's own
+  start.** A restarted stream keeps its URL, and a player that is still polling
+  reads its playlist as the old stream's next version. So a segment's sequence
+  number, timestamp and date come from its place in the time since the Unix
+  epoch, and `EXT-X-DISCONTINUITY-SEQUENCE` is different for each start. Count
+  any of them from zero and AVPlayer stays silent for as long as the old stream
+  had run. Don't use the first sequence number as the discontinuity sequence
+  either: hls.js walks an array that long after every reload. See "A restarted
+  stream keeps its place" in `docs/architecture.md`.
 - **A push to `deploy` deploys to production.** CI (`.github/workflows/ci.yml`)
   tests it, and then runs `deploy/deploy.sh COMMIT` on the host over SSH.
   Don't push to that branch unless you're asked to deploy.

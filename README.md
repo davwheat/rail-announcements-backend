@@ -69,9 +69,14 @@ Both URLs take the same parameters and carry the same audio:
   because AAC spends about 500 bytes a second on silence, and a browser that is
   waiting for enough bytes to recognize the format would take minutes to start.
 
-A listener hears an announcement about two seconds after the service starts it,
-on either URL. The first listener of an MP3 stream that isn't running yet is
-about four seconds behind until they reconnect.
+A listener hears an announcement about two seconds after the service starts it
+on `live.mp3`, and about three seconds after on `live.m3u8`. The first listener
+of an MP3 stream that isn't running yet is about four seconds behind until they
+reconnect.
+
+A stream that stops and starts again keeps its URL and its place: a player
+that is still polling the playlist carries on with the new stream's audio. See
+[A restarted stream keeps its place](docs/architecture.md#a-restarted-stream-keeps-its-place).
 
 | Parameter | Value | Default |
 |---|---|---|
