@@ -24,8 +24,9 @@ var moduleData []byte
 //go:embed data/buttons.json
 var buttonData []byte
 
-// stationFilesDelay leads into every station clip the website rewrites.
-const stationFilesDelay = 250
+// stationFilesDelay leads into every station clip that the website delays, and
+// into the door direction.
+const stationFilesDelay = 500
 
 type System struct {
 	instance instance
@@ -148,7 +149,10 @@ func destinationInfo(o destinationInfoOptions) (plan.Plan, error) {
 	if !o.TerminatingStationName.isString {
 		return plan.Plan{}, o.TerminatingStationName.notAStringError("options.terminatingStationName", "toLowerCase")
 	}
-	clips := plan.IDs("anita.this train terminates at", "anita."+audioName(o.TerminatingStationName.text))
+	clips := []plan.Clip{
+		{ID: "anita.this train terminates at"},
+		{ID: "anita." + audioName(o.TerminatingStationName.text), Delay: stationFilesDelay},
+	}
 	return plan.Plan{Clips: clips, MissingAudioMode: plan.SkipService}, nil
 }
 
