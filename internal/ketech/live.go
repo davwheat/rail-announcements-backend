@@ -362,6 +362,7 @@ func CallingPoints(m feed.Movement) ([]CallingPoint, error) {
 		Origins:             crsOf(m.Origins, func(e feed.Endpoint) feed.Location { return e.Location }),
 		Destinations:        crsOf(m.Destinations, func(e feed.Endpoint) feed.Location { return e.Location }),
 		SubsequentLocations: crsOf(m.CallingPoints, func(c feed.Call) feed.Location { return c.Location }),
+		Units:               m.Units,
 	}
 	// Coach preferences reverse at each reversal, including one at an operational call.
 	reversed := m.ReverseFormation != nil && *m.ReverseFormation
@@ -418,6 +419,9 @@ func CallingPoints(m feed.Movement) ([]CallingPoint, error) {
 		callTrain := train
 		if call.CoachCount != nil {
 			callTrain.Length = call.CoachCount
+		}
+		if call.Units != nil {
+			callTrain.Units = call.Units
 		}
 		short := ShortPlatform(deref(call.CRS), call.Platform.Number, callTrain)
 		if reversed && short != "" {

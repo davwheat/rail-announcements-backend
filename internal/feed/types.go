@@ -102,6 +102,10 @@ type Call struct {
 	DetachFront      *bool     `json:"detach_front"`
 	FalseDestination *Location `json:"false_destination"`
 	CoachCount       *int      `json:"coach_count"`
+	// Units are the units that Gemini allocates to the train at this call,
+	// such as "450042", in no order that says which end each is at. Nil when
+	// Gemini allocates none.
+	Units []string `json:"units,omitempty"`
 	// FormationChange is the coaches that leave or join the train at this
 	// call. Nil when none do, or when nothing says.
 	FormationChange *FormationChange `json:"formation_change,omitempty"`
@@ -177,6 +181,7 @@ type Movement struct {
 	CancelReason     Reason     `json:"cancel_reason"`
 	DelayReason      Reason     `json:"delay_reason"`
 	CoachCount       *int       `json:"coach_count"`
+	Units            []string   `json:"units,omitempty"`
 	LoadingPercent   *int       `json:"loading_percent"`
 	Coaches          []Coach    `json:"coaches"`
 	ReverseFormation *bool      `json:"reverse_formation"`
