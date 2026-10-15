@@ -20,6 +20,9 @@ import (
 // SamplesPerFrame is fixed by AAC-LC.
 const SamplesPerFrame = 1024
 
+// MP3SamplesPerFrame is fixed by MPEG-1 Layer III.
+const MP3SamplesPerFrame = 1152
+
 // Encoder is a running AAC encoder. Write PCM to it and read whole ADTS frames
 // from Frames. Closing it ends the stream and closes Frames.
 type Encoder struct {
@@ -150,4 +153,54 @@ func readMP3Frame(r *bufio.Reader) ([]byte, error) {
 	copy(frame, header)
 	_, err := io.ReadFull(r, frame[len(header):])
 	return frame, err
+}
+
+// mp3SideInfo finds a mono frame's side information, which follows the header
+// and the checksum that the header can announce. It reports false for anything
+// else, a stereo frame included: the encoder is only ever asked for mono.
+func mp3SideInfo(frame []byte) (side []byte, start int, ok bool) {
+	const header, sideInfo = 4, 17
+	if len(frame) < header || frame[0] != 0xFF || frame[1]&0xFE != 0xFA || frame[3]>>6 != 3 {
+		return nil, 0, false
+	}
+	start = header
+	if frame[1]&1 == 0 {
+		start += 2
+	}
+	if len(frame) < start+sideInfo {
+		return nil, 0, false
+	}
+	return frame[start : start+sideInfo], start + sideInfo, true
+}
+
+// silentMP3Frame reports whether a frame holds no audio at all, which is how
+// the encoder writes digital silence: neither granule has any data to read.
+// A granule's part2_3_length is 12 bits, at bit 18 for the first granule and
+// 59 bits on for the second.
+func silentMP3Frame(frame []byte) bool {
+	side, _, ok := mp3SideInfo(frame)
+	if !ok {
+		return false
+	}
+	length := func(bit int) int {
+		value := 0
+		for i := bit; i < bit+12; i++ {
+			value = value<<1 | int(side[i/8]>>(7-i%8)&1)
+		}
+		return value
+	}
+	return length(18) == 0 && length(18+59) == 0
+}
+
+// mp3Reach is how many frames back a frame like this one can read its audio
+// from. Layer III lets a frame keep its data in the room that earlier frames
+// left spare, up to 511 bytes before its own.
+func mp3Reach(frame []byte) int {
+	const reservoir = 511
+	_, data, ok := mp3SideInfo(frame)
+	if !ok || len(frame) <= data {
+		return reservoir
+	}
+	room := len(frame) - data
+	return (reservoir + room - 1) / room
 }

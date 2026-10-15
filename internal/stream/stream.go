@@ -96,10 +96,25 @@ func (s *Stream) StartRadio() error {
 				s.Radio.Add(frame)
 			}
 			s.Radio.Close()
+			// Nothing else waits for this encoder. Left unreaped, each stream
+			// that stops leaves a dead ffmpeg process and its pipes behind.
+			if err := encoder.Close(); err != nil {
+				s.log.Warnf("The MP3 encoder failed: %v", err)
+			}
 		}()
 		s.radio.Store(encoder)
 	})
 	return s.radioErr
+}
+
+// Trim asks for total of the silence between announcements to be left out of
+// one listener's MP3 response, counted from the response's start, with at most
+// most of it still to come. It reports how much has been left out so far and
+// how much is still to come, or false when nobody is listening by that name.
+func (s *Stream) Trim(listener string, total, most time.Duration) (trimmed, pending time.Duration, ok bool) {
+	const frame = hls.MP3SamplesPerFrame * time.Second / audio.SampleRate
+	done, left, ok := s.Radio.Trim(listener, int(total/frame), int(most/frame))
+	return time.Duration(done) * frame, time.Duration(left) * frame, ok
 }
 
 // Touch records that a listener is still there.

@@ -132,6 +132,15 @@ func count(n *int32) *int {
 	return &out
 }
 
+// units is nil for none, as the website leaves them out, so that a call
+// without them falls back to the train's.
+func units(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	return in
+}
+
 func endpoints(in []*livepb.Endpoint) []Endpoint {
 	out := make([]Endpoint, len(in))
 	for i, e := range in {
@@ -158,6 +167,7 @@ func calls(in []*livepb.Call) []Call {
 			DetachFront:      c.DetachFront,
 			FalseDestination: optionalLocation(c.GetFalseDestination()),
 			CoachCount:       count(c.CoachCount),
+			Units:            units(c.GetUnits()),
 			FormationChange:  formationChange(c.GetFormationChange()),
 		}
 	}
@@ -223,6 +233,7 @@ func movement(m *livepb.Movement) Movement {
 		CancelReason:     reason(m.GetCancelReason()),
 		DelayReason:      reason(m.GetDelayReason()),
 		CoachCount:       count(m.CoachCount),
+		Units:            units(m.GetUnits()),
 		LoadingPercent:   count(m.LoadingPercent),
 		ReverseFormation: m.ReverseFormation,
 		FalseDestination: optionalLocation(m.GetFalseDestination()),

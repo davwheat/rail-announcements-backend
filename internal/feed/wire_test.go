@@ -74,6 +74,32 @@ func TestDecodeRejectsOtherVersionsAndIgnoresUnknownPayloads(t *testing.T) {
 
 // A link carries the links of its own service, and a direction that is unset
 // until Darwin gives one, so both have to survive decoding at every depth.
+func TestDecodeReadsTheUnitsGeminiAllocates(t *testing.T) {
+	frame, err := proto.Marshal(&livepb.ServerMessage{Version: ProtocolVersion, Payload: &livepb.ServerMessage_Announcement{
+		Announcement: &livepb.Announcement{
+			AnnouncementType: livepb.AnnouncementType_ANNOUNCEMENT_TYPE_NEXT,
+			Details: &livepb.Movement{Units: []string{"444001", "450002"}, CallingPoints: []*livepb.Call{
+				{Id: "allocated", Units: []string{"450002"}},
+				{Id: "unallocated"},
+			}},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := Decode(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	details := decoded.(*Announcement).Details
+	if !reflect.DeepEqual(details.Units, []string{"444001", "450002"}) {
+		t.Errorf("the movement's units decoded to %q", details.Units)
+	}
+	if calls := details.CallingPoints; !reflect.DeepEqual(calls[0].Units, []string{"450002"}) || calls[1].Units != nil {
+		t.Errorf("the calls' units decoded to %q and %q", calls[0].Units, calls[1].Units)
+	}
+}
+
 func TestDecodeReadsLinksAtEveryDepth(t *testing.T) {
 	yes, no := true, false
 	frame, err := proto.Marshal(&livepb.ServerMessage{Version: ProtocolVersion, Payload: &livepb.ServerMessage_Announcement{

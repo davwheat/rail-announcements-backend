@@ -60,6 +60,23 @@ and `docs/architecture.md` for the design and the decisions.
   replicas, a stream lives in one replica's memory, and the proxy routes stream
   requests by that parameter (`deploy/Caddyfile`). A new stream endpoint that
   lacks it would be sent to either replica.
+- **A playlist's numbers come from the clock, and never from the stream's own
+  start.** A restarted stream keeps its URL, and a player that is still polling
+  reads its playlist as the old stream's next version. So a segment's sequence
+  number, timestamp and date come from its place in the time since the Unix
+  epoch, and `EXT-X-DISCONTINUITY-SEQUENCE` is different for each start. Count
+  any of them from zero and AVPlayer stays silent for as long as the old stream
+  had run. Don't use the first sequence number as the discontinuity sequence
+  either: hls.js walks an array that long after every reload. See "A restarted
+  stream keeps its place" in `docs/architecture.md`.
+- **A silent MP3 frame is left out only when nothing reads from it.** A
+  listener that is behind asks for silence to be left out of its response
+  (`POST /v1/streams/trim`). A Layer III frame of speech keeps its audio in up
+  to 511 bytes of the frames before it, so `hls.Broadcast` always sends the
+  last frames of a silence, and counts a silence only once it has lasted two
+  seconds, which is longer than any pause inside an announcement. Drop a frame
+  next to speech and the speech loses its first syllable:
+  `TestLeavingSilenceOutLosesNoSpeech` fails when that happens.
 - **A push to `deploy` deploys to production.** CI (`.github/workflows/ci.yml`)
   tests it, and then runs `deploy/deploy.sh COMMIT` on the host over SSH.
   Don't push to that branch unless you're asked to deploy.
